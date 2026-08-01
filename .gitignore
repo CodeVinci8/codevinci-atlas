@@ -1,0 +1,30 @@
+# Локальные данные рантайма и evidence (Master Spec §9: var/ только локально)
+/var/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+# Node / Web (VP-1+)
+node_modules/
+dist/
+# Профили, БД, сокеты, логи — никогда в Git
+*.db
+*.db-wal
+*.db-shm
+*.sock
+runner.sock
+# Секреты и credential-файлы — под явным запретом (§30)
+auth.json
+credentials.json
+.credentials.json
+*.token
+.env
+.env.*
+!.env.example
+# ОС/редакторы
+.DS_Store
+*.swp

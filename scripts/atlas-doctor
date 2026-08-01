@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""atlas-doctor — CLI-диагностика профилей и хоста без идентичностей.
+
+Master Spec §33 Result: «CLI diagnostic + minimal Web status показывают
+profiles/health и реальные handoff без identities». Показывает версии
+инструментов, health профилей (alias/state/права root/auth-state), честную
+capacity UNKNOWN. Никогда не печатает email, token, cookie, raw path.
+
+Использование:
+    PYTHONPATH=apps/core:apps/runner python3 scripts/atlas-doctor [--json] [--web-status PATH]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+for pkg in ("apps/core", "apps/runner"):
+    sys.path.insert(0, str(_ROOT / pkg))
+
+from atlas_core.diagnostics import snapshot  # noqa: E402
+from atlas_core.web_status import render_web_status  # noqa: E402
+
+
+def _print_human(snap: dict) -> None:
+    h = snap["host"]
+    print("CodeVinci Atlas — доктор (VP-0)\n")
+    print(f"  Собрано: {h['collected_at']}")
+    print(f"  ОС: {h['os']}  Python: {h['python']}")
+    print("  Инструменты:")
+    for name, ver in h["tools"].items():
+        print(f"    - {name:<8}: {ver}")
+    print("\n  Профили (без идентичностей):")
+    if not snap["profiles"]:
+        print("    (профилей нет — создайте изолированные root: scripts/profile-init.sh)")
+    for p in snap["profiles"]:
+        cap = p["capacity"]["status"]
+        mark = "0700" if p["root_is_0700"] else f"!{p['root_mode']}"
+        print(f"    - {p['alias']:<16} {p['provider']:<7} state={p['state']:<13} "
+              f"root={mark} auth={p['auth_state']} capacity={cap}")
+    print(f"\n  {snap['note']}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Диагностика профилей Atlas без идентичностей")
+    ap.add_argument("--json", action="store_true", help="вывести снимок в JSON")
+    ap.add_argument("--web-status", metavar="PATH", help="сгенерировать минимальный web-status HTML")
+    args = ap.parse_args()
+
+    snap = snapshot()
+    if args.web_status:
+        out = Path(args.web_status)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_web_status(snap), encoding="utf-8")
+        print(f"web-status записан: {out}")
+    if args.json:
+        print(json.dumps(snap, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        _print_human(snap)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

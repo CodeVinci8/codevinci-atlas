@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/run-result.json",
+  "title": "RunResult",
+  "description": "Структурный результат запуска агента (Master Spec §12, §16.1). Без секретов.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "provider", "profile_alias"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "state": {
+      "type": "string",
+      "enum": ["QUEUED", "PREPARING", "RUNNING", "COLLECTING", "SUCCEEDED",
+               "RATE_LIMITED", "FAILED", "INTERRUPTED", "CANCELLED"]
+    },
+    "provider": {"type": "string", "enum": ["codex", "claude"]},
+    "profile_alias": {"type": "string", "description": "Публичный alias без идентичностей"},
+    "session_id": {"type": ["string", "null"]},
+    "exit_code": {"type": ["integer", "null"]},
+    "structured_output": {"type": "object"},
+    "output_hash": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "error_code": {"type": ["string", "null"]},
+    "error_evidence": {"type": ["string", "null"], "description": "Уже redacted"},
+    "started_at": {"type": "string"},
+    "finished_at": {"type": ["string", "null"]}
+  }
+}

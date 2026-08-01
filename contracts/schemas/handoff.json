@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/handoff.json",
+  "title": "HandoffPackage",
+  "description": "Компактный пакет продолжения новой сессии (Master Spec §16.4). Без credentials и полного чата.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project_id", "vp_id", "goal", "immutable_constraints",
+               "exact_next_action", "prohibited_actions"],
+  "properties": {
+    "project_id": {"type": "string"},
+    "vp_id": {"type": "string"},
+    "goal": {"type": "string"},
+    "immutable_constraints": {"type": "array", "items": {"type": "string"}},
+    "baseline_head": {"type": ["string", "null"]},
+    "current_head": {"type": ["string", "null"]},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "commands": {"type": "array", "items": {"type": "object"}},
+    "failures": {"type": "array", "items": {"type": "object"}},
+    "acceptance_matrix": {"type": "array", "items": {"type": "object"}},
+    "decisions": {"type": "array", "items": {"type": "string"}},
+    "exact_next_action": {"type": "string"},
+    "prohibited_actions": {"type": "array", "items": {"type": "string"}},
+    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+    "from_profile_alias": {"type": ["string", "null"]},
+    "session_ids": {"type": "array", "items": {"type": "string"}},
+    "progress": {"type": "object", "description": "Состояние продолжения для recovery"},
+    "handoff_id": {"type": "string"},
+    "created_at": {"type": "string"}
+  }
+}
