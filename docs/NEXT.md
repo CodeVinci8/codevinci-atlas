@@ -1,28 +1,21 @@
 # NEXT — активный VP и следующий шаг
 
+## Завершено
+
+**VP-0 — Profile Pool & Live Handoff Proof: ЗАВЕРШЁН, 11/11 PASS**
+([`vp/VP-0.md`](vp/VP-0.md)). Реальные A→B доказаны для Codex и Claude;
+изоляция через per-profile идентичности и исполняемые файлы; recovery до
+успеха; секрет-скан чист; capacity UNKNOWN. Принимается через PR в `main`.
+
 ## Активный VP
 
-**VP-0 — Profile Pool & Live Handoff Proof** ([`vp/VP-0.md`](vp/VP-0.md)).
-
-**Статус: НЕ завершён.** Механизм и все проверки, не требующие подписки,
-доказаны реально: **8/11 критериев PASS**, юнит-приёмка зелёная. Критерии
-**3–5 (реальные A→B) — GATE_REAL**: механизм доказан (PASS_MECHANISM), но
-реальное подтверждение требует owner-логина реальных профилей.
-
-Что уже реально доказано (не механизм):
-- изоляция профилей через **отдельные Unix-идентичности** (кросс-чтение и
-  чтение сервисным `atlas` — DENIED);
-- Runner interruption → reconciliation → **продолжение до одного успеха** без
-  второго writer и дублей;
-- отсутствие credentials в дереве/истории Git/БД/логах/artifacts (полный скан).
+**VP-1 — Foundation** ([Master Spec §34](MASTER_SPEC.md)). Compose Core/Web +
+systemd Runner + health/migrations/Audit + CLI `doctor/backup/status` + RU/EN
+shell + CI. Одна feature-ветка, WIP=1, один writer. Профильный пул и полный
+Pulse — НЕ в VP-1 (позже: Agent Pipeline / Full Web Console).
 
 ## NEXT_ACTION
 
-1. Владелец выполняет `scripts/login-gate.sh` — логин **2 Codex + 2 Claude**
-   под их идентичностями, **по одному профилю за раз**, разные аккаунты.
-   Ничего не вставлять в чат (токены/коды/email/cookie).
-2. Затем `scripts/manual_real_probe.py` и `scripts/run_acceptance.py`
-   продолжают ТОТ ЖЕ VP-0 и закрывают крит. 3–5.
-3. Отдельные гейты: первый commit/push, выбор LICENSE.
-
-VP-1 не начинается, пока крит. 3–5 не закрыты реально (Master Spec §46).
+Реализовать VP-1 по §34 в ветке `atlas/vp-1-foundation`; на границе — полная
+приёмка §34, негативные/recovery-проверки и секрет-скан; затем PR/merge.
+VP-2 не начинать.

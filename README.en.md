@@ -13,24 +13,21 @@ endless chat.
 
 ## Status
 
-Active staged development across **VP-0…VP-9**. Current stage — **VP-0:
-Profile Pool & Live Handoff Proof**. **VP-0 is not complete yet:** 8/11 criteria
-are proven for real; the real A→B probes (criteria 3–5) are behind an owner
-login gate for real subscription profiles (`GATE_REAL`).
+Active staged development across **VP-0…VP-9**. **VP-0: Profile Pool & Live
+Handoff Proof — COMPLETE (11/11 PASS)**, including real A→B for both Codex and
+Claude. Current stage — **VP-1: Foundation**.
 
-Proven for real:
+Proven for real in VP-0:
 
-- isolation of **2 Codex + 2 Claude** profiles via separate Unix identities
-  (profile A's process cannot read B's credentials; the `atlas` service user
-  reads none);
-- **one writer** per worktree; Runner interruption → reconciliation →
-  continuation to a single success without a second writer;
-- recovery after Core restart;
+- isolation of **2 Codex + 2 Claude** profiles via separate Unix identities and
+  executables (profile A's process cannot read B's credentials; `atlas` reads none);
+- **real A→B**: profile A yields a structured result, Atlas persists and verifies
+  the HandoffPackage against the DB, profile B (different account, separate
+  session) continues and finishes — independently checkable, for both providers;
+- **one writer**; Runner interruption → reconciliation → continuation to one success;
+- recovery after Core restart; rate-limit profile switch without a second writer;
 - no secrets in tree/Git history/DB/logs/artifacts;
 - honest **UNKNOWN** capacity.
-
-The mechanism (fake) is proven for rate-limit profile switching and A→B
-handoff; real confirmation of criteria 3–5 runs after the owner login.
 
 ## Quick start (VP-0 proof)
 
