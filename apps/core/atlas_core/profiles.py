@@ -55,6 +55,7 @@ class Profile:
     last_result: str | None = None
     last_error: str | None = None
     runtime_user: str | None = None  # отдельная Unix-идентичность профиля (§7.2)
+    executable_path: str | None = None  # per-profile исполняемый файл CLI (§11)
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
@@ -74,6 +75,7 @@ class Profile:
             "last_result": self.last_result,
             "last_error": self.last_error,
             "runtime_user": self.runtime_user,  # имя пользователя — не секрет
+            "executable_path": self.executable_path,  # путь к CLI — не секрет
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -121,6 +123,25 @@ def assert_no_cross_owner(env: dict, profile: Profile) -> None:
 
 
 _PROVIDER_ABBR = {"codex": "cx", "claude": "cl"}
+
+
+_EXE_NAME = {"codex": "codex", "claude": "claude"}
+
+
+def detect_executable(root_path: str, provider: str) -> str | None:
+    """Найти per-profile исполняемый файл CLI в root профиля.
+
+    Приоритет: ``<root>/.local/bin/<exe>`` (owner-установка на профиль),
+    затем глобальный из PATH. Возвращает путь или None.
+    """
+
+    import shutil
+    name = _EXE_NAME[provider]
+    local = os.path.join(root_path, ".local", "bin", name)
+    if os.path.exists(local):
+        return local
+    found = shutil.which(name)
+    return found
 
 
 def runtime_user_for(alias: str, provider: str) -> str:
@@ -181,6 +202,7 @@ def create_profile_root(alias: str, provider: str, runtime_user: str | None = No
         root_path=str(root),
         state=ProfileState.AUTH_REQUIRED,  # root есть, credentials — нет
         runtime_user=ru,
+        executable_path=detect_executable(str(root), provider),
         last_result=f"root создан 0700 ({owner})",
     )
 
@@ -249,6 +271,7 @@ class ProfileRegistry:
             last_result=raw.get("last_result"),
             last_error=raw.get("last_error"),
             runtime_user=raw.get("runtime_user"),
+            executable_path=raw.get("executable_path"),
             created_at=raw.get("created_at", utcnow_iso()),
             updated_at=raw.get("updated_at", utcnow_iso()),
         )
