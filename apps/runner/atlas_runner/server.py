@@ -102,8 +102,19 @@ class RunnerServer:
                 await self._handle_run(msg.get("request", {}), writer)
             elif mtype == "interrupt":
                 await self._handle_interrupt(msg.get("request_id", ""), writer)
-            elif mtype == "ping":
-                await self._send(writer, {"type": "pong", "recovered": self.recovered_on_start})
+            elif mtype in ("ping", "health"):
+                await self._send(writer, {
+                    "type": "pong",
+                    "recovered": self.recovered_on_start,
+                    "health": {
+                        "status": "READY",
+                        "version": __import__("atlas_runner").__version__,
+                        "uid": os.geteuid(),
+                        "non_root": os.geteuid() != 0,
+                        "active_jobs": len(self._jobs),
+                        "socket": self.cfg.socket_path,
+                    },
+                })
             else:
                 await self._send(writer, {"type": "error", "code": ErrorCode.OUTPUT_INVALID.value,
                                           "evidence": f"неизвестный тип {mtype}"})

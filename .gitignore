@@ -11,6 +11,8 @@ __pycache__/
 # Node / Web (VP-1+)
 node_modules/
 dist/
+*.tsbuildinfo
+.vite/
 # Профили, БД, сокеты, логи — никогда в Git
 *.db
 *.db-wal

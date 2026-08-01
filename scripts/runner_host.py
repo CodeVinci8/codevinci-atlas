@@ -18,16 +18,23 @@ _ROOT = Path(__file__).resolve().parents[1]
 for pkg in ("apps/core", "apps/runner"):
     sys.path.insert(0, str(_ROOT / pkg))
 
+from atlas_runner.protocol import generate_token, write_token_file  # noqa: E402
 from atlas_runner.server import RunnerConfig, RunnerServer  # noqa: E402
 
 
 async def main() -> None:
+    # Токен: из окружения (тесты) или сгенерировать и записать в token-файл (прод),
+    # чтобы Core (иной пользователь) мог аутентифицироваться, читая файл 0600.
+    token = os.environ.get("ATLAS_RUNNER_TOKEN") or generate_token()
+    token_file = os.environ.get("ATLAS_RUNNER_TOKEN_FILE")
+    if token_file:
+        write_token_file(token_file, token)
     cfg = RunnerConfig(
         socket_path=os.environ["ATLAS_RUNNER_SOCK"],
-        token=os.environ["ATLAS_RUNNER_TOKEN"],
+        token=token,
         journal_path=os.environ["ATLAS_RUNNER_JOURNAL"],
-        allowed_dirs=os.environ.get("ATLAS_RUNNER_ALLOWED", "").split(":"),
-        allow_root=True,
+        allowed_dirs=[d for d in os.environ.get("ATLAS_RUNNER_ALLOWED", "").split(":") if d],
+        allow_root=os.environ.get("ATLAS_RUNNER_ALLOW_ROOT") == "1",
         grace_s=1.0,
     )
     srv = RunnerServer(cfg)

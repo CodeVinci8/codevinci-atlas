@@ -1,0 +1,36 @@
+[Unit]
+Description=CodeVinci Atlas Runner (native host, UDS)
+Documentation=https://github.com/CodeVinci8/codevinci-atlas
+After=network.target
+
+[Service]
+Type=simple
+# Рантайм НЕ от root (Master Spec §7.3, §34): сервисный пользователь atlas.
+User=atlas
+Group=atlas
+WorkingDirectory=/opt/CodeVinciAtlas
+Environment=PYTHONPATH=/opt/CodeVinciAtlas/apps/core:/opt/CodeVinciAtlas/apps/runner
+Environment=ATLAS_RUNNER_SOCK=/run/codevinci-atlas/runner.sock
+Environment=ATLAS_RUNNER_TOKEN_FILE=/run/codevinci-atlas/runner.token
+Environment=ATLAS_RUNNER_JOURNAL=/var/lib/codevinci-atlas/runner/journal.jsonl
+Environment=ATLAS_RUNNER_ALLOWED=/var/lib/codevinci-atlas/worktrees:/var/lib/codevinci-atlas/profiles
+ExecStart=/usr/bin/python3 /opt/CodeVinciAtlas/scripts/runner_host.py
+Restart=on-failure
+RestartSec=2
+
+# Каталог сокета/токена под /run с нужными правами и владельцем.
+RuntimeDirectory=codevinci-atlas
+RuntimeDirectoryMode=0750
+
+# Дроп привилегий в идентичности профилей требует SETUID/SETGID (§30.2, VP0-D4).
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+
+# Ужесточение окружения (не мешает per-profile runuser).
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
