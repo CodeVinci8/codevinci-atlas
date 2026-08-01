@@ -88,15 +88,21 @@ def _git_history_scan(repo: str, markers: list[str]) -> list[dict]:
         return hits
     if not revs:
         return hits
+    from .redaction import redact
     for marker in markers:
         try:
-            out = subprocess.run(["git", "-C", repo, "grep", "-I", "-n", "-e", marker, *revs],
+            # -E + точные токен-паттерны: bare "sk-"/"ghp_" дают ложные срабатывания
+            # (напр. «risk-», пример в документации). -l: только имена файлов.
+            out = subprocess.run(["git", "-C", repo, "grep", "-I", "-l", "-E", "-e", marker, *revs],
                                  capture_output=True, text=True, timeout=120)
+            # -l: только <commit>:<path> без содержимого (не тащим сырые токены в отчёт)
             for line in out.stdout.splitlines():
+                path = line.split(":", 1)[-1]
                 # исключаем синтетические фикстуры tests/ и определения правил
-                if "/tests/" in line or "redaction.py" in line or "secret_scan.py" in line:
+                if path.startswith("tests/") or "/tests/" in path or \
+                        path.endswith("redaction.py") or path.endswith("secret_scan.py"):
                     continue
-                hits.append({"marker": marker, "location": line[:200]})
+                hits.append({"marker": marker, "location": redact(line)[:200]})
         except Exception:  # noqa: BLE001
             continue
     return hits
@@ -118,19 +124,61 @@ def _service_user_cannot_read_roots(profile_roots: list[str], service_user: str)
     return True
 
 
+def _git_identity_emails(repo: str) -> set[str]:
+    """Настроенная git-идентичность владельца — не секрет и не account-email."""
+    emails = set()
+    for scope in (["--local"], ["--global"], []):
+        try:
+            out = subprocess.run(["git", "-C", repo, "config", *scope, "user.email"],
+                                 capture_output=True, text=True, timeout=10)
+            e = out.stdout.strip()
+            if e:
+                emails.add(e)
+        except Exception:  # noqa: BLE001
+            continue
+    return emails
+
+
+def _tracked_and_untracked(repo: str) -> list[str]:
+    """Файлы, которые в Git или попадут в Git (исключает .git и gitignored var/)."""
+    files: set[str] = set()
+    for args in (["ls-files"], ["ls-files", "-o", "--exclude-standard"]):
+        try:
+            out = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=30)
+            for line in out.stdout.splitlines():
+                if line.strip():
+                    files.add(os.path.join(repo, line.strip()))
+        except Exception:  # noqa: BLE001
+            continue
+    return sorted(files)
+
+
 def scan_repo(repo_root: str, *, extra_roots: list[str] | None = None,
               service_user: str = "atlas") -> ScanReport:
     rep = ScanReport()
-    all_roots = [repo_root] + list(extra_roots or [])
-    rep.targets = all_roots
+    identity_emails = _git_identity_emails(repo_root)
+
+    # Рабочее дерево = то, что в Git или попадёт в Git (не git-внутренности).
+    tree_files = _tracked_and_untracked(repo_root)
+    rep.targets = [f"{repo_root} (git-tracked+untracked: {len(tree_files)} файлов)"] + list(extra_roots or [])
 
     credential_roots: set[str] = set()
-    for hit in scan_paths(all_roots):
+
+    def _classify(hit):
         if _is_credential_root(hit.path):
             rep.credential_root_hits += 1
             credential_roots.add(os.path.dirname(hit.path))
-            continue  # санкционированный auth-store — не утечка
+            return
+        # настроенная git-идентичность владельца — не утечка
+        if hit.rule == "email" and any(e in hit.preview for e in identity_emails):
+            rep.allowlisted_hits.append(hit)
+            return
         (rep.allowlisted_hits if _is_allowlisted(hit) else rep.real_hits).append(hit)
+
+    for hit in scan_paths(tree_files):
+        _classify(hit)
+    for hit in scan_paths(list(extra_roots or [])):
+        _classify(hit)
 
     # структурная гарантия для найденных auth-root'ов
     if credential_roots:
@@ -146,7 +194,13 @@ def scan_repo(repo_root: str, *, extra_roots: list[str] | None = None,
     else:
         rep.git_history_scanned = True
         from .redaction import SECRET_MARKER
-        rep.git_history_hits = _git_history_scan(repo_root, [SECRET_MARKER, "ghp_", "sk-ant-", "sk-"])
+        # точные токен-паттерны (совпадают с правилами redaction), не bare-подстроки
+        rep.git_history_hits = _git_history_scan(repo_root, [
+            SECRET_MARKER,
+            r"gh[pousr]_[A-Za-z0-9]{20,}",
+            r"sk-ant-[A-Za-z0-9_-]{16,}",
+            r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}",
+        ])
         rep.note = (f"История Git просканирована ({rep.git_commits} коммит(ов)). "
                     "Credential-root'ы исключены; сервисный atlas их не читает.")
     return rep
