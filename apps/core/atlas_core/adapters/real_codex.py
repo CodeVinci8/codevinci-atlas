@@ -1,17 +1,22 @@
-"""Реальный адаптер Codex, сверенный с codex-cli 0.146.0 (Master Spec §12.1).
+"""Реальный адаптер Codex, сверенный с codex-cli 0.146.0 на живом CLI.
 
-Проверенный контракт (см. read-only аудит перед этим VP):
-* новый запуск: ``codex exec --json --skip-git-repo-check -s read-only <prompt>``;
-* строгий verdict: ``--output-schema <FILE>``; последнее сообщение: ``-o <FILE>``;
-* продолжение: ``codex exec resume <SESSION_ID> --json <prompt>``;
-* изолированный root: ``CODEX_HOME=<root>``;
-* статус: ``codex login status`` (rc=0 и «Not logged in», если не авторизован);
-* headless-логин: ``codex login --device-auth``.
+Формат событий подтверждён реальным прогоном (redacted):
+* `thread.started` → `thread_id` (UUID сессии/треда);
+* `turn.started`;
+* `item.completed` → `item{type:"agent_message", text:"<ответ>"}`;
+* `turn.completed` → `usage`.
 
-Дроп привилегий: при ``run_as_user`` и правах root CLI запускается ``runuser
--u <идентичность> -- env …`` — под идентичностью профиля (§7.2), поэтому
-процесс физически не видит чужие credentials. auth-детали НЕ раскрывают
-email/account.
+Контракт:
+* новый запуск: ``codex exec --json --skip-git-repo-check -s read-only -C <cwd> <prompt>``;
+* строгий verdict: ``--output-schema <FILE>``;
+* продолжение: ``codex exec resume <SESSION_ID> --json …``;
+* статус: ``codex login status`` (rc=0; текст «Not logged in», если не авторизован);
+* изолированный root: ``CODEX_HOME=<root>``; per-profile исполняемый файл.
+
+Изоляция: под ``run_as_user`` и root запуск идёт через
+``runuser -u <ident> -- env -i HOME=… CODEX_HOME=… PATH=… <exe> …`` — под
+идентичностью профиля, поэтому чужие credentials недоступны. stdin закрыт
+(codex иначе блокируется на чтении stdin). auth-детали НЕ раскрывают account.
 """
 
 from __future__ import annotations
@@ -27,35 +32,35 @@ from ..ids import new_id, utcnow_iso
 from ..redaction import redact
 from .base import AdapterResult
 
-_ENV_KEEP = ("PATH", "LANG", "LC_ALL", "TERM")
-
 
 class RealCodexAdapter:
     provider = "codex"
     executable = "codex"
 
     def discover_capabilities(self) -> list[SessionCapability]:
-        caps = [SessionCapability.NEW_SESSION]
-        if self._available():
-            caps += [SessionCapability.RESUME_BY_ID, SessionCapability.FRESH_WITH_HANDOFF,
-                     SessionCapability.FORK_NATIVE]
-        return caps
+        return [SessionCapability.NEW_SESSION, SessionCapability.RESUME_BY_ID,
+                SessionCapability.FRESH_WITH_HANDOFF, SessionCapability.FORK_NATIVE]
 
-    def _available(self) -> bool:
-        return shutil.which(self.executable) is not None
+    def _resolve_exe(self, executable: str | None) -> str | None:
+        return executable or shutil.which(self.executable)
 
-    def cli_version(self) -> str | None:
-        if not self._available():
+    def cli_version(self, executable: str | None = None, *, root_path: str | None = None,
+                    run_as_user: str | None = None) -> str | None:
+        exe = self._resolve_exe(executable)
+        if not exe:
             return None
+        argv, kw = self._wrap([exe, "--version"], root_path or "/tmp", run_as_user)
         try:
-            out = subprocess.run([self.executable, "--version"], capture_output=True, text=True, timeout=15)
+            out = subprocess.run(argv, capture_output=True, text=True, timeout=20,
+                                 stdin=subprocess.DEVNULL, **kw)
             return redact((out.stdout or out.stderr).strip())
         except Exception:  # noqa: BLE001
             return None
 
     # --- построение argv (чистое, тестируется) -----------------------------
-    def build_start_argv(self, job: JobPackage) -> list[str]:
-        argv = [self.executable, "exec", "--json", "--skip-git-repo-check", "-s", "read-only"]
+    def build_start_argv(self, job: JobPackage, executable: str | None = None) -> list[str]:
+        exe = executable or self.executable
+        argv = [exe, "exec", "--json", "--skip-git-repo-check", "-s", "read-only"]
         cwd = job.inputs.get("cwd")
         if cwd:
             argv += ["-C", cwd]
@@ -67,41 +72,47 @@ class RealCodexAdapter:
         argv += [self._render_prompt(job)]
         return argv
 
-    def build_resume_argv(self, session_id: str, job: JobPackage) -> list[str]:
-        argv = [self.executable, "exec", "resume", session_id, "--json",
-                "--skip-git-repo-check", "-s", "read-only"]
+    def build_resume_argv(self, session_id: str, job: JobPackage, executable: str | None = None) -> list[str]:
+        exe = executable or self.executable
+        argv = [exe, "exec", "resume", session_id, "--json", "--skip-git-repo-check", "-s", "read-only"]
+        cwd = job.inputs.get("cwd")
+        if cwd:
+            argv += ["-C", cwd]
         argv += [self._render_prompt(job)]
         return argv
 
     def _render_prompt(self, job: JobPackage) -> str:
-        # Компактный prompt: без полного chat/repo (§16.3).
-        return job.goal
+        return job.goal  # компактный prompt, без полного chat/repo (§16.3)
 
     # --- окружение и дроп привилегий ---------------------------------------
     def _wrap(self, argv: list[str], root_path: str, run_as_user: str | None) -> tuple[list[str], dict]:
         import os
-        base = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
-        env_pairs = {"CODEX_HOME": root_path, "HOME": root_path}
+        safe_path = f"/usr/bin:/bin:{root_path}/.local/bin"
         if run_as_user and os.geteuid() == 0:
-            # runuser сбрасывает окружение → задаём переменные через env(1)
-            wrapped = ["runuser", "-u", run_as_user, "--", "env",
-                       *[f"{k}={v}" for k, v in env_pairs.items()], *argv]
-            return wrapped, base
-        base.update(env_pairs)
-        return argv, base
+            # runuser + env -i: полностью изолированное окружение идентичности
+            wrapped = ["runuser", "-u", run_as_user, "--", "env", "-i",
+                       f"HOME={root_path}", f"CODEX_HOME={root_path}", f"PATH={safe_path}",
+                       *argv]
+            return wrapped, {}
+        env = {"HOME": root_path, "CODEX_HOME": root_path, "PATH": safe_path}
+        for k in ("LANG", "LC_ALL", "TERM"):
+            if k in os.environ:
+                env[k] = os.environ[k]
+        return argv, {"env": env}
 
-    def auth_status(self, root_path: str, *, run_as_user: str | None = None) -> dict:
-        if not self._available():
-            return {"authenticated": False, "state": "CLI_ABSENT",
-                    "detail": "codex CLI не установлен"}
-        argv, env = self._wrap([self.executable, "login", "status"], root_path, run_as_user)
+    def auth_status(self, root_path: str, *, executable: str | None = None,
+                    run_as_user: str | None = None) -> dict:
+        exe = self._resolve_exe(executable)
+        if not exe:
+            return {"authenticated": False, "state": "CLI_ABSENT", "detail": "codex CLI не найден"}
+        argv, kw = self._wrap([exe, "login", "status"], root_path, run_as_user)
         try:
-            out = subprocess.run(argv, capture_output=True, text=True, timeout=30, env=env)
+            out = subprocess.run(argv, capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL, **kw)
         except Exception as exc:  # noqa: BLE001
             return {"authenticated": False, "state": "ERROR", "detail": redact(str(exc))[:120]}
         low = f"{out.stdout}\n{out.stderr}".lower()
         authed = ("logged in" in low) and ("not logged in" not in low)
-        # detail НЕ содержит account/email — только факт состояния
         return {"authenticated": authed,
                 "state": "READY" if authed else "AUTH_REQUIRED",
                 "detail": "codex: авторизован" if authed else "codex: не авторизован"}
@@ -112,12 +123,11 @@ class RealCodexAdapter:
     # --- исполнение ---------------------------------------------------------
     def _execute(self, argv: list[str], job: JobPackage, *, profile_alias: str, root_path: str,
                  session_id: str | None, run_as_user: str | None) -> AdapterResult:
-        if not self._available():
-            raise AtlasError(classify("codex CLI не установлен: login required"))
-        wrapped, env = self._wrap(argv, root_path, run_as_user)
+        wrapped, kw = self._wrap(argv, root_path, run_as_user)
         try:
             out = subprocess.run(wrapped, capture_output=True, text=True,
-                                 timeout=job.inputs.get("timeout_s", 120), env=env)
+                                 timeout=job.inputs.get("timeout_s", 150),
+                                 stdin=subprocess.DEVNULL, **kw)
         except subprocess.TimeoutExpired as exc:
             raise AtlasError(classify("timed out", exception=exc))
         except Exception as exc:  # noqa: BLE001
@@ -133,45 +143,61 @@ class RealCodexAdapter:
         return AdapterResult(result=result, handoff_state={"session_id": sess or session_id})
 
     def _parse_json_events(self, stdout: str) -> tuple[dict, str | None]:
+        """Разобрать поток codex exec --json (проверенный формат)."""
         session_id = None
-        last_text = None
-        last_obj: dict = {}
+        answer_text = None
         for line in stdout.splitlines():
             line = line.strip()
-            if not line:
-                continue
+            if not line.startswith("{"):
+                continue  # пропускаем не-JSON (напр. "Reading additional input…")
             try:
                 evt = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if not isinstance(evt, dict):
                 continue
-            # id сессии/треда встречается под разными ключами в зависимости от версии
-            for key in ("thread_id", "session_id", "conversation_id", "id"):
-                if evt.get(key):
-                    session_id = evt[key]
-                    break
-            # финальное сообщение ассистента
-            msg = evt.get("message") or evt.get("text") or evt.get("last_agent_message")
-            if isinstance(msg, str):
-                last_text = msg
-            last_obj = evt
-        structured = {}
-        if last_text:
-            try:
-                structured = json.loads(last_text)
-            except (json.JSONDecodeError, TypeError):
-                structured = {"text": last_text[:500]}
-        elif last_obj:
-            structured = {"last_event_type": last_obj.get("type")}
+            if evt.get("type") == "thread.started" and evt.get("thread_id"):
+                session_id = evt["thread_id"]
+            elif evt.get("type") == "item.completed":
+                item = evt.get("item") or {}
+                if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                    answer_text = item["text"]
+        structured: dict = {}
+        if answer_text:
+            structured = self._coerce_json(answer_text)
         return structured, session_id
 
+    @staticmethod
+    def _coerce_json(text: str) -> dict:
+        text = text.strip()
+        try:
+            v = json.loads(text)
+            return v if isinstance(v, dict) else {"value": v}
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # выделить первый JSON-объект из текста
+        import re
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            try:
+                v = json.loads(m.group(0))
+                return v if isinstance(v, dict) else {"value": v}
+            except json.JSONDecodeError:
+                pass
+        return {"text": text[:500]}
+
     def start(self, job: JobPackage, *, profile_alias: str, root_path: str,
-              run_as_user: str | None = None) -> AdapterResult:
-        return self._execute(self.build_start_argv(job), job, profile_alias=profile_alias,
-                             root_path=root_path, session_id=None, run_as_user=run_as_user)
+              executable: str | None = None, run_as_user: str | None = None) -> AdapterResult:
+        if not self._resolve_exe(executable):
+            raise AtlasError(classify("codex CLI не найден: login required"))
+        argv = self.build_start_argv(job, self._resolve_exe(executable))
+        return self._execute(argv, job, profile_alias=profile_alias, root_path=root_path,
+                             session_id=None, run_as_user=run_as_user)
 
     def resume(self, session_id: str, job: JobPackage, *, profile_alias: str, root_path: str,
-               run_as_user: str | None = None) -> AdapterResult:
-        return self._execute(self.build_resume_argv(session_id, job), job, profile_alias=profile_alias,
-                             root_path=root_path, session_id=session_id, run_as_user=run_as_user)
+               executable: str | None = None, run_as_user: str | None = None) -> AdapterResult:
+        if not self._resolve_exe(executable):
+            raise AtlasError(classify("codex CLI не найден: login required"))
+        argv = self.build_resume_argv(session_id, job, self._resolve_exe(executable))
+        return self._execute(argv, job, profile_alias=profile_alias, root_path=root_path,
+                             session_id=session_id, run_as_user=run_as_user)

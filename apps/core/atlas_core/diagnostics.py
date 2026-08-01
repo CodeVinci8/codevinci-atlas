@@ -63,12 +63,15 @@ def profile_health() -> list[dict]:
         adapter = adapters[p.provider]
         # probe выполняется ПОД идентичностью профиля (реальная граница),
         # если она есть и мы root; иначе — напрямую.
-        auth = adapter.auth_status(p.root_path, run_as_user=p.runtime_user)
+        auth = adapter.auth_status(p.root_path, executable=p.executable_path,
+                                   run_as_user=p.runtime_user)
+        cli_ver = adapter.cli_version(p.executable_path, root_path=p.root_path,
+                                      run_as_user=p.runtime_user)
         rows.append({
             "alias": p.alias,  # публичный alias — единственный идентификатор
             "provider": p.provider,
-            "state": p.state.value,
-            "cli_version": p.cli_version,
+            "state": ("READY" if auth.get("authenticated") else p.state.value),
+            "cli_version": cli_ver or p.cli_version,
             "root_mode": perm.get("mode"),
             "root_is_0700": perm.get("is_0700"),
             "root_owner": perm.get("owner"),

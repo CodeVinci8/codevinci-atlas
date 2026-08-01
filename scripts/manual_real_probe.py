@@ -43,7 +43,8 @@ def main() -> int:
     print("=== manual-real: auth status (реальные probe, под идентичностью профиля) ===")
     ready: dict[str, list] = {"codex": [], "claude": []}
     for p in profiles:
-        st = _adapter(p.provider).auth_status(p.root_path, run_as_user=p.runtime_user)
+        st = _adapter(p.provider).auth_status(p.root_path, executable=p.executable_path,
+                                              run_as_user=p.runtime_user)
         print(f"  {p.alias:<16} {p.provider:<7} -> {'READY' if st['authenticated'] else st['state']}")
         if st.get("authenticated"):
             ready[p.provider].append(p)
