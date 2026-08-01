@@ -122,7 +122,8 @@ class Acceptance:
         adapters = {"codex": RealCodexAdapter(), "claude": RealClaudeAdapter()}
         ready = {"codex": [], "claude": []}
         for p in self.real_registry.list():
-            st = adapters[p.provider].auth_status(p.root_path, run_as_user=p.runtime_user)
+            st = adapters[p.provider].auth_status(p.root_path, executable=p.executable_path,
+                                                  run_as_user=p.runtime_user)
             if st.get("authenticated"):
                 ready[p.provider].append(p)
         results = {}
@@ -238,13 +239,19 @@ class Acceptance:
         real_pass = sum(1 for c in self.results if c["status"] == PASS)
         gates = [c["id"] for c in self.results if c["status"] == GATE]
         fails = [c["id"] for c in self.results if c["status"] == FAIL]
-        vp0_complete = not gates and not fails
+        vp0_complete = not gates and not fails and unittest_ok
+        if vp0_complete:
+            verdict = "COMPLETE — 11/11 PASS (включая реальные A→B Codex и Claude)"
+        elif gates:
+            verdict = f"INCOMPLETE — GATE_REAL на критериях {gates} (нужен owner-логин)"
+        elif fails:
+            verdict = f"INCOMPLETE — FAIL на критериях {fails}"
+        else:
+            verdict = "INCOMPLETE — юнит-приёмка не зелёная"
         matrix = {"vp": "VP-0", "generated_at": snapshot()["host"]["collected_at"],
                   "criteria": self.results, "unittest_passed": unittest_ok,
                   "real_pass_count": real_pass, "gate_real_criteria": gates, "failed_criteria": fails,
-                  "vp0_complete": vp0_complete,
-                  "verdict": ("COMPLETE" if vp0_complete else
-                              "INCOMPLETE — реальные A→B (крит. 3–5) за owner-гейтом логина")}
+                  "vp0_complete": vp0_complete, "verdict": verdict}
         self._art("acceptance_matrix.json", matrix)
         self._write_report(matrix)
         self._publish_to_repo()
