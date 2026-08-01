@@ -1,6 +1,6 @@
 # Reuse Register — решения по внешним проектам
 
-**Статус:** обновлено в рамках VP-0.
+**Статус:** обновлено в рамках VP-0 (+ фокус-аудит Sub2API перед VP-1 Web-shell).
 **Основание решений (evidence):**
 - правило владения credentials — один auth owner на профиль (Master Spec §11.1);
 - VP-0 реализовал изоляцию/lease/handoff/Runner **нативно**, без копирования
@@ -29,6 +29,64 @@
 | [ccusage](https://github.com/ccusage/ccusage) | MIT | **SPIKE/WRAP (позже)** | Локальные отчёты usage Claude/Codex | Usage ≠ точный остаток лимита. Пока capacity=UNKNOWN честно (§11.6). |
 | [GitHub Spec Kit](https://github.com/github/spec-kit) | MIT | **REFERENCE** | Spec-driven workflow | Идеи, не полный генератор. |
 | [OpenHands](https://github.com/OpenHands/OpenHands) | MIT | **REFERENCE** | Паттерны runtime/events/self-host | Слишком тяжёл как зависимость; UDS-Runner реализован минимально нативно. |
+
+## Фокус-аудит Sub2API (read-only, перед VP-1 Web-shell)
+
+**Инспектированный commit:** `Wei-Shaw/sub2api@b74024c7868ee88a0bf921306cbc22a2f922872a`
+(default branch `main`, LGPL-3.0). Аудит **read-only**, код не копировался.
+**Инспектированные файлы:** `frontend/src/views/admin/AccountsView.vue` (92KB),
+`frontend/src/views/admin/GroupsView.vue`, `backend/ent/schema/account.go` (9KB),
+`backend/internal/service/openai_account_scheduler.go` (95KB),
+`backend/internal/service/ops_health_score.go` (4KB),
+`frontend/src/views/admin/ops/OpsDashboard.vue` (27KB), `README.md`, `LICENSE`.
+
+### Что наблюдалось (концепты, не код)
+
+1. **Операционная плотность.** Таблицы аккаунтов с фильтрами и сортировкой;
+   индексы схемы по `status`, `priority`, `last_used_at`, `schedulable`,
+   `rate_limited_at`, `rate_limit_reset_at` — подтверждают сортируемые/фильтруемые
+   колонки и компактные статус/ёмкость/cooldown-представления.
+2. **Поведение пула.** Явное разделение общего состояния (`status`:
+   active/error/disabled) и планируемости (`schedulable`); метаданные приоритета
+   и конкуренции (`priority`, `concurrency`, `load_factor`, `rate_multiplier`);
+   `last_used_at`; rate-limit сброс (`rate_limited_at`/`rate_limit_reset_at`);
+   временная недоступность с причиной (`temp_unschedulable_until`/`_reason`,
+   `overload_until`); членство в группах (edge `groups`).
+3. **Планировщик.** Eligibility до scoring; сигналы health/capacity/cooldown/
+   recent-use; детерминированный tie-break; наблюдаемые error-rate/latency.
+4. **Операционный обзор.** `ops_health_score.go`: health **вычисляется бэкендом
+   из реальных наблюдений** — слоистый score (Business 70% + Infra 30%; error-rate
+   + TTFT), с явным idle/gray-состоянием при отсутствии трафика (не «плохо») —
+   ложится на Atlas `UNKNOWN/STALE/OFFLINE/loading/empty/error`.
+
+### Решение: **REFERENCE** (только идеи/поведение)
+
+| Аспект | Atlas-ссылка | Явная граница (НЕ копировать) |
+|---|---|---|
+| Плотные таблицы/фильтры | идеи для Profiles-таблицы (VP-8) | без Vue-компонентов, стилей, строк, разметки экранов |
+| Разделение state/schedulable | health/cooldown/drain модель (§11.3) | без копирования схемы `account.go` |
+| Сигналы планировщика | Router §17.3 (нативный) | без переноса взвешенного планировщика Sub2API |
+| Health из наблюдений | truthful health/`UNKNOWN` (§11.5/§31) | без копирования `ops_health_score.go` |
+
+### Жёсткие запреты (подтверждены аудитом)
+
+- **Никакого кода/компонентов/стилей/строк/ассетов/схем/разметки экранов Sub2API.**
+- Sub2API хранит `credentials` **в строке аккаунта** (JSON-поле) — это
+  централизованная БД credentials, которую Atlas **НЕ принимает**: правило одного
+  auth owner на профиль (§11.1). Credentials Atlas живут только в изолированных
+  auth-root профилей.
+- Без API-gateway/relay, billing/payment, proxy, user-management, коммерческой
+  инфраструктуры Sub2API.
+- Без переноса native-сессий между разными владельцами credentials.
+- LGPL-3.0 + явная пометка «No Commercial Authorization» в README →
+  консервативная граница «no-copy» сохраняется даже при неопределённой лицензии
+  Atlas.
+
+### Границы VP-1 (scope не расширять)
+
+Профильный пул/маршрутизация — это Agent Pipeline VP (§38). Полный плотный
+Profiles/Pulse — Full Web Console VP (§41). VP-1 реализует ТОЛЬКО foundation,
+минимальный RU/EN Web-shell, truthful health и видимость Runner-offline (§34).
 
 ## Итог VP-0
 
