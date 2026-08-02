@@ -217,10 +217,15 @@ class WorkspaceService:
             baseline = self._baseline_dict(bl_row) if bl_row else None
             project = p.to_dict()
 
-        repo = self._repo_path(p)
-        live = gitbaseline.quick_state(repo) if repo else {"accessible": False, "head": "", "dirty": False}
+        # Ожидаемый репозиторий: для local_git/archive это source_location вне
+        # зависимости от доступности (удалённый источник → live.accessible=False
+        # → состояние error, а не тихий clean на устаревшем baseline).
+        expected = (p.source_location if p.source_kind in ("local_git", "archive")
+                    and p.source_location else "")
+        live = (gitbaseline.quick_state(expected) if expected
+                else {"accessible": False, "head": "", "dirty": False})
         lease_state = self._lease_state(worktrees)
-        state = self._compute_state(project, baseline, live, repo)
+        state = self._compute_state(project, baseline, live, expected or None)
         return {
             "project": project,
             "baseline": baseline,
