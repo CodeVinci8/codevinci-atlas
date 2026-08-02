@@ -261,7 +261,98 @@ export const api = {
       { work_order_ids: woIds }),
   listCheckpoints: (id: string, wid: string) =>
     getJSON<{ checkpoints: CheckpointRow[] }>(`/api/v1/projects/${id}/checkpoints?work_order_id=${wid}`),
+
+  // --- VP-5 Agent Pipeline ---
+  listRuns: (projectId?: string) =>
+    getJSON<{ runs: RunRow[] }>(`/api/v1/runs${projectId ? `?project_id=${projectId}` : ""}`),
+  getRun: (rid: string) => getJSON<{ run: RunDetail }>(`/api/v1/runs/${rid}`),
+  runEvents: (rid: string) => getJSON<{ events: RunEventRow[] }>(`/api/v1/runs/${rid}/events`),
+  runRouter: (rid: string) =>
+    getJSON<{ decisions: RouterDecisionRow[]; sessions: ProviderSessionRow[] }>(`/api/v1/runs/${rid}/router`),
+  createRun: (body: { project_id: string; work_order_id?: string; vp_key?: string }) =>
+    sendJSON<{ run: RunDetail }>("/api/v1/runs", "POST", body),
+  pauseRun: (rid: string, expected: number) =>
+    sendJSON<{ run: RunDetail }>(`/api/v1/runs/${rid}/pause`, "POST", { expected_version: expected }),
+  resumeRun: (rid: string, expected: number) =>
+    sendJSON<{ run: RunDetail }>(`/api/v1/runs/${rid}/resume`, "POST", { expected_version: expected }),
+  cancelRun: (rid: string, expected: number) =>
+    sendJSON<{ run: RunDetail }>(`/api/v1/runs/${rid}/cancel`, "POST", { expected_version: expected }),
+  listProfiles: () =>
+    getJSON<{ profiles: ProfileView[]; summary: Record<string, number> }>("/api/v1/profiles"),
+  listModels: () => getJSON<{ models: ModelRow[] }>("/api/v1/models"),
+  systemSummary: () => getJSON<{ summary: SystemSummary }>("/api/v1/system/summary"),
 };
+
+// --- VP-5 types ------------------------------------------------------------
+export type RunState =
+  | "QUEUED" | "PREPARING" | "RUNNING" | "COLLECTING" | "SUCCEEDED"
+  | "RATE_LIMITED" | "AUTH_REQUIRED" | "PAUSED" | "INTERRUPTED"
+  | "FAILED" | "CANCELLED" | "OWNER_REQUIRED";
+
+export interface RunRow {
+  id: string; project_id: string; work_order_id: string; vp_key: string;
+  state: RunState; next_action: string; blocker: string; failure_class: string;
+  version: number; created_at: string; updated_at: string;
+}
+export interface RoleStep {
+  id: string; run_id: string; role: string; seq: number;
+  requested_model: string; effective_model: string;
+  requested_profile: string; effective_profile: string; provider: string;
+  session_ref: string; status: string; verdict: string; reason_code: string;
+}
+export interface RunDetail extends RunRow {
+  role_steps: RoleStep[];
+  events_count: number;
+  active_lease: { profile_id: string; role: string; worktree: string }[];
+}
+export interface RunEventRow {
+  id: string; run_id: string; seq: number; type: string;
+  occurred_at: string; payload: Record<string, unknown>; schema_version: number;
+}
+export interface RouterDecisionRow {
+  id: string; run_id: string; role: string;
+  requested_model: string; requested_profile: string;
+  effective_model: string; effective_profile: string;
+  reason_code: string; candidates: unknown[]; decided_at: string;
+}
+export interface ProviderSessionRow {
+  id: string; run_id: string; role: string; provider: string;
+  profile_id: string; session_id: string; status: string; started_at: string;
+}
+export interface CapacityView {
+  status: string; five_h_used_pct: number | null; seven_d_used_pct: number | null;
+  reset_at: string | null; source: string; observed_at: string | null;
+}
+export interface ProfileHealthView {
+  auth_status: string; plan_label: string; cli_version: string;
+  permissions_ok: boolean; observed_at: string;
+}
+export interface ProfileView {
+  id: string; alias: string; provider: string; unix_label: string;
+  schedulable: boolean; enabled: boolean; state: string;
+  cooldown_until: string | null; drain: boolean;
+  current_run_id: string; current_role: string; next_action: string;
+  health: ProfileHealthView | null;
+  capacity: CapacityView;
+  active_lease: { run_id: string; role: string; worktree: string } | null;
+}
+export interface ModelRow {
+  id: string; provider: string; model_id: string; alias: string; display: string;
+  availability: string; source: string; confidence: string; discovered_at: string;
+}
+export interface SystemSummary {
+  collected_at: string; atlas_version: string; db_migration: string | null;
+  cpu: { logical_cores: number | null; load_avg: number[] | null };
+  memory: { total_bytes: number | null; used_bytes: number | null };
+  disk: { total_bytes: number | null; used_bytes: number | null };
+  os: { os_name: string | null; os_version: string | null; kernel: string | null;
+        arch: string | null; machine_id: string | null };
+  host_uptime_s: number | null;
+  services: Record<string, { status: string; uptime_s: number | null; note?: string }>;
+  backup_age_s: number | null;
+  runs: { active: number; queued: number; paused: number; owner_required: number };
+  leases: { worktree_writers: number; profile_leases: number };
+}
 
 // --- VP-4 types ------------------------------------------------------------
 export type WoStatus =
