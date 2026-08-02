@@ -10,8 +10,12 @@
   решения accept/reject, nodes/edges, approval + envelope, parking lot,
   Project/Portfolio Map, diff, экспорт MD/JSON; merged PR #4 squash `07ed6f4`;
   живая БД на `0003_product_map`).
-- **Активного VP нет.** Следующий гейт — VP-4 (Work Orders & Context), **не
-  начат** (отдельное решение владельца).
+- **VP-4 — Work Orders & Context: РЕАЛИЗОВАН — 26/26** (VP Spec из принятого
+  Brief/Map, Work Orders + переходы, оптимизатор READY/MERGE/SPLIT/OWNER_REQUIRED/
+  SWITCH_PROFILE, bounded JobPackage, checkpoint/handoff, свежая изолированная
+  реконструкция внутри Core-образа, ротация с одним writer, compact-fallback,
+  Work Orders UI RU/EN). Живая БД на `0004_work_orders`; PR на ревью, точные
+  PR #/CI head/merge-SHA — post-merge sync. Следующий гейт — VP-5, **не начат**.
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
   Runner READY.
 - **Профили:** 4 реальных, авторизованы; per-profile идентичности

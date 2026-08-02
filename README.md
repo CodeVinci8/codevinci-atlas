@@ -78,8 +78,10 @@ domain socket с request-token. Credentials не монтируются в Web. 
 - [`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md) — каноническое ТЗ.
 - Исполнимые спеки: [`docs/vp/VP-0.md`](docs/vp/VP-0.md),
   [`docs/vp/VP-1.md`](docs/vp/VP-1.md), [`docs/vp/VP-2.md`](docs/vp/VP-2.md),
-  [`docs/vp/VP-3.md`](docs/vp/VP-3.md).
+  [`docs/vp/VP-3.md`](docs/vp/VP-3.md), [`docs/vp/VP-4.md`](docs/vp/VP-4.md).
 - [`docs/PRODUCT_MAP.md`](docs/PRODUCT_MAP.md) — модель Product Map и API VP-3.
+- [`docs/WORK_ORDERS.md`](docs/WORK_ORDERS.md) — Work Orders & Context Engine
+  и API VP-4.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md),
   [`docs/INSTALL.md`](docs/INSTALL.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md),
   [`docs/TEST_POLICY.md`](docs/TEST_POLICY.md).

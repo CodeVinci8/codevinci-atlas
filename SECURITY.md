@@ -35,6 +35,14 @@ symlink-escape, утечка секретов, confused deputy, устаревш
   (`INTAKE_INVALID`) — в БД/экспорт не попадает. `VERIFIED` требует resolvable
   evidence + совпадения hash; approval не создаёт `VERIFIED` из гипотезы. Экспорт
   MD/JSON без credentials/env-дампов/raw auth-путей/небезопасного HTML.
+- **Work Orders & Context (VP-4): изоляция и не-эскалация.** JobPackage и
+  HandoffPackage bounded и immutable, **без** repo/полного чата/логов/credentials/
+  env; capabilities — только из allowlist, контекст не расширяет права (§30.2).
+  Свежий потребитель (`scripts/vp4_fresh_consumer.py`) исполняется отдельным
+  процессом в чистом окружении — без БД, credentials, полного repo и старого чата;
+  compact-fallback fail-closed `OWNER_REQUIRED`; реальных provider-вызовов нет.
+  Handoff отклоняет tamper/stale/wrong-project/wrong-version/wrong-HEAD/
+  over-capability. Audit append-only и redacted.
 
 ## Cookie-гейт (§30.3)
 

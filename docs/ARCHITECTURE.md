@@ -38,8 +38,9 @@ Host Runner (systemd, user atlas)      ← VP-0 прототип (allow_root в 
     инвариант; восстановление после рестарта Core.
   - `diagnostics.py`, `web_status.py` — CLI/web без идентичностей.
   - `orm.py` + `migrations/` — durable-состояние через Alembic (прод-путь):
-    `0001` audit, `0002` Project Workspace, `0003` Product Map. Прод-таблицы
-    создаёт только Alembic (не ORM-автосоздание).
+    `0001` audit, `0002` Project Workspace, `0003` Product Map,
+    `0004` Work Orders. Прод-таблицы создаёт только Alembic (не
+    ORM-автосоздание).
   - `workspace.py`/`gitbaseline.py`/`worktrees.py`/`wsleases.py` (VP-2) —
     источники проекта, read-only baseline, безопасные worktree и writer-аренды.
   - `productmap.py`/`productmap_export.py`/`api_productmap.py` (VP-3) —
@@ -47,6 +48,13 @@ Host Runner (systemd, user atlas)      ← VP-0 прототип (allow_root в 
     один активный VP, parking lot, Portfolio-проекция, детерминированный
     экспорт MD/JSON. Owner-текст bounded+redacted; секреты в БД не попадают.
     См. [`PRODUCT_MAP.md`](PRODUCT_MAP.md).
+  - `workorders.py`/`optimizer.py`/`context_engine.py`/`governor.py`/
+    `vp4handoff.py`/`reconstruct.py`/`api_workorders.py` (VP-4) — VP Spec,
+    Work Orders + переходы (один writer, оптимистичная блокировка,
+    идемпотентность), оптимизатор (READY/MERGE/SPLIT/OWNER_REQUIRED/
+    SWITCH_PROFILE), bounded JobPackage, Context Governor + checkpoint/handoff,
+    свежая изолированная реконструкция (`scripts/vp4_fresh_consumer.py`,
+    контракт `run-result.json`). См. [`WORK_ORDERS.md`](WORK_ORDERS.md).
 - **`apps/runner/atlas_runner`**
   - `protocol.py` — framing + request-token.
   - `server.py` — asyncio UDS: allowlist, argv-only, stream+redaction,
