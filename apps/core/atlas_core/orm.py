@@ -960,3 +960,304 @@ class HandoffLink(Base):
     handoff_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
     kind: Mapped[str] = mapped_column(String(20), default="")  # checkpoint|handoff|recovery
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+# --- VP-6 Review & Quality (Master Spec §18, §39) --------------------------
+# ReviewPackage (immutable, SHA-bound), findings, QualityReport, impact-оценка,
+# Evidence Cache, manual audit, waiver, fix-loop. Content-hash — sha256 над
+# canonical-JSON. Секреты/email/cookie/raw path/transcript НИКОГДА не хранятся.
+# Таблицы создаёт только Alembic (0006_review_quality).
+
+
+class ReviewPackage(Base):
+    """Immutable, SHA-bound ReviewPackage (§18.1). Инвалидация фактом (§VP6-D4)."""
+
+    __tablename__ = "review_packages"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    run_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), default="")
+    vp_key: Mapped[str] = mapped_column(String(80), default="", index=True)
+    wo_key: Mapped[str] = mapped_column(String(80), default="")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    base_sha: Mapped[str] = mapped_column(String(64), default="")
+    head_sha: Mapped[str] = mapped_column(String(64), default="")
+    spec_hash: Mapped[str] = mapped_column(String(80), default="")
+    brief_hash: Mapped[str] = mapped_column(String(80), default="")
+    map_hash: Mapped[str] = mapped_column(String(80), default="")
+    diff_summary_json: Mapped[str] = mapped_column(Text, default="{}")      # bounded
+    artifact_hashes_json: Mapped[str] = mapped_column(Text, default="[]")   # [{path, sha}]
+    acceptance_json: Mapped[str] = mapped_column(Text, default="[]")        # матрица критериев
+    claims_json: Mapped[str] = mapped_column(Text, default="[]")            # заявления Builder
+    impact_class: Mapped[str] = mapped_column(String(20), default="")
+    checks_json: Mapped[str] = mapped_column(Text, default="[]")            # команды/результаты/cache
+    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    limitations_json: Mapped[str] = mapped_column(Text, default="[]")
+    grant_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    freshness_json: Mapped[str] = mapped_column(Text, default="{}")         # свежесть источников
+    content_hash: Mapped[str] = mapped_column(String(80), default="", index=True)
+    status: Mapped[str] = mapped_column(String(12), default="valid", index=True)  # valid|invalid
+    invalid_code: Mapped[str] = mapped_column(String(40), default="")
+    invalid_reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "project_id": self.project_id, "run_id": self.run_id,
+            "work_order_id": self.work_order_id, "vp_key": self.vp_key,
+            "wo_key": self.wo_key, "correlation_id": self.correlation_id,
+            "branch": self.branch, "base_sha": self.base_sha, "head_sha": self.head_sha,
+            "spec_hash": self.spec_hash, "brief_hash": self.brief_hash,
+            "map_hash": self.map_hash,
+            "diff_summary": _json.loads(self.diff_summary_json or "{}"),
+            "artifact_hashes": _json.loads(self.artifact_hashes_json or "[]"),
+            "acceptance": _json.loads(self.acceptance_json or "[]"),
+            "claims": _json.loads(self.claims_json or "[]"),
+            "impact_class": self.impact_class,
+            "checks": _json.loads(self.checks_json or "[]"),
+            "evidence_refs": _json.loads(self.evidence_refs_json or "[]"),
+            "limitations": _json.loads(self.limitations_json or "[]"),
+            "grant_snapshot": _json.loads(self.grant_snapshot_json or "{}"),
+            "freshness": _json.loads(self.freshness_json or "{}"),
+            "content_hash": self.content_hash, "status": self.status,
+            "invalid_code": self.invalid_code, "invalid_reason": self.invalid_reason,
+            "actor": self.actor, "created_at": _iso(self.created_at),
+        }
+
+
+class QualityFinding(Base):
+    """Finding (§18.2): severity/criterion/location/evidence/action/blocking/source/code."""
+
+    __tablename__ = "quality_findings"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    gate: Mapped[str] = mapped_column(String(40), default="", index=True)
+    code: Mapped[str] = mapped_column(String(60), default="")   # стабильный код finding
+    severity: Mapped[str] = mapped_column(String(12), default="minor")  # blocker|major|minor|info
+    criterion: Mapped[str] = mapped_column(String(200), default="")
+    location: Mapped[str] = mapped_column(String(300), default="")
+    evidence: Mapped[str] = mapped_column(Text, default="")     # redacted, bounded
+    action: Mapped[str] = mapped_column(Text, default="")
+    blocking: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(60), default="")
+    freshness: Mapped[str] = mapped_column(String(20), default="")  # FRESH|STALE|UNKNOWN
+    waived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "gate": self.gate, "code": self.code, "severity": self.severity,
+            "criterion": self.criterion, "location": self.location,
+            "evidence": self.evidence, "action": self.action,
+            "blocking": self.blocking, "source": self.source,
+            "freshness": self.freshness, "waived": self.waived,
+            "created_at": _iso(self.created_at),
+        }
+
+
+class QualityReport(Base):
+    """QualityReport (§18.2/§39): вердикт + объяснение, immutable content_hash."""
+
+    __tablename__ = "quality_reports"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    run_id: Mapped[str] = mapped_column(String(40), default="")
+    verdict: Mapped[str] = mapped_column(String(20), default="", index=True)
+    claims_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_summary: Mapped[str] = mapped_column(Text, default="")   # что доказывает/опровергает
+    gate_fired: Mapped[str] = mapped_column(String(60), default="")
+    sufficiency_reason: Mapped[str] = mapped_column(Text, default="")  # почему проверок достаточно
+    next_action: Mapped[str] = mapped_column(Text, default="")
+    stop_reason: Mapped[str] = mapped_column(Text, default="")         # почему полировка стоп
+    blocking_count: Mapped[int] = mapped_column(Integer, default=0)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0)
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="reviewer")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "run_id": self.run_id, "verdict": self.verdict,
+            "claims": _json.loads(self.claims_json or "[]"),
+            "evidence_summary": self.evidence_summary, "gate_fired": self.gate_fired,
+            "sufficiency_reason": self.sufficiency_reason, "next_action": self.next_action,
+            "stop_reason": self.stop_reason, "blocking_count": self.blocking_count,
+            "findings_count": self.findings_count, "content_hash": self.content_hash,
+            "actor": self.actor, "created_at": _iso(self.created_at),
+        }
+
+
+class ImpactAssessment(Base):
+    """Impact-оценка (§18.5): класс + обоснование + выбранные check-группы."""
+
+    __tablename__ = "impact_assessments"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    impact_class: Mapped[str] = mapped_column(String(20), default="", index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    check_groups_json: Mapped[str] = mapped_column(Text, default="[]")
+    risk_trigger: Mapped[str] = mapped_column(Text, default="")
+    full_regression: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "impact_class": self.impact_class, "reason": self.reason,
+            "check_groups": _json.loads(self.check_groups_json or "[]"),
+            "risk_trigger": self.risk_trigger, "full_regression": self.full_regression,
+            "created_at": _iso(self.created_at),
+        }
+
+
+class EvidenceCacheEntry(Base):
+    """Evidence Cache (§18.7). Ключ = SHA+команда/версия+input+env+scope."""
+
+    __tablename__ = "evidence_cache"
+    __table_args__ = (UniqueConstraint("cache_key", name="uq_evidence_cache_key"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(120), index=True)
+    sha: Mapped[str] = mapped_column(String(64), default="")
+    command: Mapped[str] = mapped_column(String(200), default="")
+    command_version: Mapped[str] = mapped_column(String(80), default="")
+    input_hash: Mapped[str] = mapped_column(String(80), default="")
+    environment: Mapped[str] = mapped_column(String(80), default="")
+    scope: Mapped[str] = mapped_column(String(80), default="")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    reuse_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    last_reused_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "cache_key": self.cache_key, "sha": self.sha,
+            "command": self.command, "command_version": self.command_version,
+            "input_hash": self.input_hash, "environment": self.environment,
+            "scope": self.scope, "result": _json.loads(self.result_json or "{}"),
+            "passed": self.passed, "reason": self.reason, "stale": self.stale,
+            "reuse_count": self.reuse_count, "created_at": _iso(self.created_at),
+            "last_reused_at": _iso_opt(self.last_reused_at),
+        }
+
+
+class ManualAudit(Base):
+    """Manual audit (§18.4): read-only, не мутирует код."""
+
+    __tablename__ = "manual_audits"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    target: Mapped[str] = mapped_column(String(20), default="")  # project|vp|diff|screen|dependencies|docs|ai_waste
+    scope: Mapped[str] = mapped_column(String(200), default="")
+    read_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    findings_count: Mapped[int] = mapped_column(Integer, default=0)
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "target": self.target, "scope": self.scope, "read_only": self.read_only,
+            "result": _json.loads(self.result_json or "{}"),
+            "findings_count": self.findings_count, "actor": self.actor,
+            "created_at": _iso(self.created_at),
+        }
+
+
+class Waiver(Base):
+    """Waiver (§18.4): обязательные поля; не обходит non-waivable-правила."""
+
+    __tablename__ = "waivers"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    finding_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    scope: Mapped[str] = mapped_column(String(200), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    expiry: Mapped[str] = mapped_column(String(120), default="")
+    review_condition: Mapped[str] = mapped_column(Text, default="")
+    audit_ref: Mapped[str] = mapped_column(String(40), default="")
+    waivable: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rejected_code: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "finding_id": self.finding_id, "reason": self.reason, "scope": self.scope,
+            "actor": self.actor, "expiry": self.expiry,
+            "review_condition": self.review_condition, "audit_ref": self.audit_ref,
+            "waivable": self.waivable, "rejected_code": self.rejected_code,
+            "created_at": _iso(self.created_at),
+        }
+
+
+class FixLoop(Base):
+    """Fix-loop (§18.8): attempt 1..2; второй REVISE → BLOCKED."""
+
+    __tablename__ = "fix_loops"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    review_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    run_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    verdict: Mapped[str] = mapped_column(String(20), default="")
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    fix_work_order_id: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "review_package_id": self.review_package_id,
+            "run_id": self.run_id, "attempt": self.attempt, "verdict": self.verdict,
+            "blocked": self.blocked, "fix_work_order_id": self.fix_work_order_id,
+            "created_at": _iso(self.created_at),
+        }
+
+
+class ProfileRegistryReconcile(Base):
+    """Append-only запись idempotent-сверки реестра профилей → БД (VP6-D2)."""
+
+    __tablename__ = "profile_registry_reconciles"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    created: Mapped[int] = mapped_column(Integer, default=0)
+    updated: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    by_provider_json: Mapped[str] = mapped_column(Text, default="{}")
+    actor: Mapped[str] = mapped_column(String(80), default="deploy")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "created": self.created, "updated": self.updated,
+            "total": self.total, "by_provider": _json.loads(self.by_provider_json or "{}"),
+            "actor": self.actor, "created_at": _iso(self.created_at),
+        }
