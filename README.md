@@ -27,9 +27,18 @@ versioned-памятью вместо бесконечного чата.
   diff версий, scope-envelope, parking lot и экспорт accepted-состояния в
   Markdown/JSON. Каждый факт несёт явный truth-status; `VERIFIED` требует
   проверяемого evidence.
+- **VP-4 — Work Orders & Context: ЗАВЕРШЁН (26/26 PASS)**
+  ([`docs/vp/VP-4.md`](docs/vp/VP-4.md), [`docs/WORK_ORDERS.md`](docs/WORK_ORDERS.md)) —
+  детерминированный VP Spec из принятого Brief/Map, исполняемые Work Orders с
+  версионным жизненным циклом и writer-арендами (один writer), контролируемые
+  решения оптимизатора (READY/MERGE/SPLIT/OWNER_REQUIRED/SWITCH_PROFILE),
+  bounded immutable JobPackage, Context Governor с durable-checkpoint и handoff,
+  а также **свежий изолированный потребитель**, который восстанавливает
+  состояние только из HandoffPackage. Смёржен через PR #6 (squash `7a3f82d`,
+  CI head `280ee35`); живая БД — на `0004_work_orders`.
 
-Активного VP нет. Следующий этап — **VP-4: Work Orders & Context**
-(Master Spec §37) — **не начат** и стартует по отдельному решению владельца.
+Активного VP нет. Следующий этап — **VP-5: Agent Pipeline**
+(Master Spec §38) — **не начат** и стартует по отдельному решению владельца.
 
 ## Быстрый старт
 
@@ -56,6 +65,7 @@ curl -s http://127.0.0.1:3210/api/v1/health
 python3 scripts/run_vp1_acceptance.py      # 17/17
 python3 scripts/run_vp2_acceptance.py      # 20/20
 python3 scripts/run_vp3_acceptance.py      # 26/26 (VP-3)
+python3 scripts/run_vp4_acceptance.py      # 26/26 (VP-4)
 ```
 
 Юнит/интеграционные тесты Core/Runner (без стека):
