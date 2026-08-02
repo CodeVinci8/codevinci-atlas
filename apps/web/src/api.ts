@@ -118,6 +118,79 @@ async function sendJSON<T>(path: string, method: string, body?: unknown): Promis
   return data as T;
 }
 
+// --- VP-3 Product Map ------------------------------------------------------
+export type TruthStatus =
+  | "VERIFIED" | "OWNER_PROVIDED" | "INFERRED" | "HYPOTHESIS" | "STALE" | "UNKNOWN";
+export type DecisionStatus = "proposed" | "accepted" | "rejected";
+export type NodeType =
+  | "goal" | "user_problem" | "brief_decision" | "vp" | "blocker"
+  | "evidence_ref" | "next_action" | "parking_item";
+export type EdgeType = "dependency" | "blocks" | "proves" | "includes" | "next";
+
+export interface Fact { text: string; truth_status: TruthStatus; evidence_ref: string; evidence_hash: string; }
+export interface Hypothesis { text: string; truth_status: TruthStatus; }
+export interface BriefContent {
+  product_statement: string; user_and_problem: string; current_alternative: string;
+  promised_result: string; confirmed_facts: Fact[]; hypotheses: Hypothesis[];
+  main_scenario: string; mvp_scope: string[]; out_of_scope: string[];
+  success_metric: string; risks: string[]; minimum_validation: string;
+  stop_criterion: string; linked_decisions: string[];
+}
+export interface Envelope { in_scope: string[]; out_of_scope: string[]; constraints: string[]; boundary_note: string; }
+export interface FullBrief {
+  id: string; version: number; parent_id: string; status: string;
+  content_hash: string; envelope_hash: string; created_at: string;
+  content: BriefContent; envelope: Envelope;
+}
+export interface BriefRef { version: number; id: string; status: string; content_hash: string; created_at: string; }
+export interface DecisionRow {
+  id: string; decision_key: string; title: string; detail: string;
+  status: DecisionStatus; required: boolean; truth_status: TruthStatus;
+  note: string; version: number; updated_at: string;
+}
+export interface ParkingRow {
+  id: string; title: string; reason: string; return_condition: string;
+  status: string; version: number; created_at: string;
+}
+export interface MapNode {
+  node_key: string; node_type: NodeType; title: string; detail: string;
+  truth_status: TruthStatus; evidence_ref: string; evidence_hash: string; data: unknown;
+}
+export interface MapEdge { edge_id: string; src_key: string; dst_key: string; edge_type: EdgeType; }
+export interface MapView {
+  id: string; version: number; status: string; content_hash: string;
+  created_at: string; nodes: MapNode[]; edges: MapEdge[];
+}
+export interface ProductState {
+  project: { id: string; name: string; status: string; source_kind: SourceKind };
+  brief: FullBrief | null;
+  approved_brief_version: number | null;
+  brief_versions: BriefRef[];
+  decisions: DecisionRow[];
+  parking_lot: ParkingRow[];
+  map: MapView | null;
+  active_vp: string | null;
+  stage: string;
+  next_action: string;
+}
+export interface PortfolioRow {
+  project_id: string; name: string; status: string; stage: string;
+  active_vp: string; last_known_state: string; blocker: string; truth_state: string;
+  brief_version: number | null; approved_version: number | null; next_action: string;
+}
+export interface BriefDiff {
+  from: number; to: number; from_hash: string; to_hash: string;
+  content: { added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, { from: unknown; to: unknown }> };
+  envelope: { added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, { from: unknown; to: unknown }> };
+}
+
+export interface IntakeBody {
+  idea?: string; target_user?: string; desired_result?: string;
+  constraints?: string[]; risks?: string[]; links?: string[];
+  baseline_refs?: string[]; permissions_notes?: string;
+  parking_suggestions?: string[];
+}
+
 export const api = {
   health: () => getJSON<Health>("/api/v1/health"),
   audit: () => getJSON<AuditPage>("/api/v1/audit?limit=20"),
@@ -132,4 +205,26 @@ export const api = {
   createWorktree: (id: string, branch: string) =>
     sendJSON<Overview>(`/api/v1/projects/${id}/worktrees`, "POST", { branch }),
   disconnect: (id: string) => sendJSON<Overview>(`/api/v1/projects/${id}`, "DELETE"),
+
+  // VP-3 Product Map
+  productState: (id: string) => getJSON<ProductState>(`/api/v1/projects/${id}/product-state`),
+  submitIntake: (id: string, body: IntakeBody) =>
+    sendJSON<ProductState>(`/api/v1/projects/${id}/intake`, "POST", body),
+  reviseBrief: (id: string, briefId: string, changes: Record<string, unknown>, expected: number) =>
+    sendJSON<FullBrief>(`/api/v1/projects/${id}/briefs/${briefId}/revise`, "POST",
+      { changes, expected_version: expected }),
+  approveBrief: (id: string, briefId: string, expected: number) =>
+    sendJSON<Record<string, string>>(`/api/v1/projects/${id}/briefs/${briefId}/approve`, "POST",
+      { expected_version: expected }),
+  decide: (id: string, decisionId: string, action: "accept" | "reject", note: string, expected: number) =>
+    sendJSON<DecisionRow>(`/api/v1/projects/${id}/decisions/${decisionId}/${action}`, "POST",
+      { note, expected_version: expected }),
+  addParking: (id: string, body: { title: string; reason?: string; return_condition?: string }) =>
+    sendJSON<ParkingRow>(`/api/v1/projects/${id}/parking-lot`, "POST", body),
+  activateVp: (id: string, vpKey: string) =>
+    sendJSON<{ active_vp: string | null }>(`/api/v1/projects/${id}/map/vps/activate`, "POST", { vp_key: vpKey }),
+  briefDiff: (id: string, from: number, to: number) =>
+    getJSON<BriefDiff>(`/api/v1/projects/${id}/briefs/diff?from=${from}&to=${to}`),
+  portfolio: () => getJSON<{ projects: PortfolioRow[] }>("/api/v1/portfolio"),
+  exportUrl: (id: string, format: "json" | "md") => `/api/v1/projects/${id}/export?format=${format}`,
 };

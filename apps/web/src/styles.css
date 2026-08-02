@@ -209,4 +209,71 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .kv dt { margin-top: 8px; }
 }
 
+/* --- VP-3 Product Map --------------------------------------------------- */
+.field textarea {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 11px; font-size: 14px; min-width: 0;
+  font: inherit; resize: vertical; line-height: 1.5;
+}
+
+/* tabs Overview / Product Map */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+.tab {
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--muted); padding: 9px 14px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--ember-strong); border-bottom-color: var(--ember); }
+
+/* truth / decision badges — символ + текст + цвет только для правдивого состояния */
+.tbadge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; width: fit-content;
+  border: 1px solid var(--border-soft);
+}
+.tb-verified { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.tb-owner    { background: color-mix(in srgb, var(--info) 18%, transparent); color: var(--info); }
+.tb-inferred { background: color-mix(in srgb, var(--info) 12%, transparent); color: var(--muted); }
+.tb-hypo     { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.tb-stale    { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+.tb-unknown  { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+.db-acc { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.db-rej { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+.db-prop { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+
+.pm-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.panel-head h2 { margin: 0; }
+
+.fact-list, .node-list, .edge-list, .version-list, .parking-list, .decision-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.fact-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+.scope-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 8px; }
+.scope-col h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); }
+.scope-col ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; }
+
+.decision-item { border: 1px solid var(--border-soft); border-radius: 9px; padding: 12px 14px; background: var(--surface-2); }
+.decision-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.decision-detail { font-size: 12.5px; margin: 4px 0; max-width: 620px; }
+.decision-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reject-box { margin-top: 10px; display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.btn-sm { padding: 4px 10px; font-size: 12.5px; }
+
+.node-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.node-type { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); min-width: 132px; }
+.edge-list li { font-size: 12.5px; color: var(--muted); }
+.version-list li { font-size: 13px; }
+
+.park-form, .diff-form, .revise-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.revise-form { flex-direction: column; align-items: stretch; }
+.diff-out { margin-top: 12px; }
+.diff-out ul { margin: 4px 0; padding-left: 18px; font-size: 12.5px; }
+.diff-from { color: var(--danger); }
+.diff-to { color: var(--ok); }
+
+@media (max-width: 460px) {
+  .node-type { min-width: 0; }
+  .decision-head { flex-direction: column; }
+}
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

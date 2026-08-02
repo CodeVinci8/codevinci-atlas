@@ -4,6 +4,9 @@ import {
   type ProjectSummary, type ProjectState, type SourceKind,
 } from "./api";
 import { catalogs, detectInitialLocale, type Locale, type LocaleKey } from "./i18n";
+import { PortfolioView, ProductMapView } from "./productmap";
+
+type NavView = "projects" | "pulse" | "portfolio";
 
 type T = (key: LocaleKey) => string;
 function useT(locale: Locale): T {
@@ -56,10 +59,17 @@ function sourceKey(k: SourceKind): LocaleKey {
 // ---------------------------------------------------------------------------
 export function App() {
   const [locale, setLocale] = useState<Locale>(detectInitialLocale());
-  const [view, setView] = useState<"projects" | "pulse">("projects");
+  const [view, setView] = useState<NavView>("projects");
   const [selected, setSelected] = useState<string | null>(null);
   const [coreOffline, setCoreOffline] = useState(false);
   const t = useT(locale);
+
+  // Dark — утверждённый default Atlas (§28). Светлое OS-предпочтение НЕ должно
+  // молча заменять тёмную тему: без явного сохранённого выбора ставим dark.
+  useEffect(() => {
+    const saved = localStorage.getItem("atlas.theme");
+    document.documentElement.dataset.theme = saved === "light" ? "light" : "dark";
+  }, []);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -89,10 +99,12 @@ export function App() {
             <strong>{t("common.offline")}</strong> — {t("common.offlineHint")}
           </div>
         )}
-        {view === "pulse" ? (
+        {selected ? (
+          <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
+        ) : view === "pulse" ? (
           <PulseView t={t} />
-        ) : selected ? (
-          <OverviewView t={t} id={selected} onBack={() => setSelected(null)} />
+        ) : view === "portfolio" ? (
+          <PortfolioView t={t} onOpen={setSelected} />
         ) : (
           <ProjectsView t={t} onOpen={setSelected} />
         )}
@@ -104,9 +116,9 @@ export function App() {
 // --- Sidebar ---------------------------------------------------------------
 function Sidebar({ t, locale, setLocale, view, onNav }: {
   t: T; locale: Locale; setLocale: (l: Locale) => void;
-  view: string; onNav: (v: "projects" | "pulse") => void;
+  view: string; onNav: (v: NavView) => void;
 }) {
-  const item = (id: "projects" | "pulse", label: string, sym: string) => (
+  const item = (id: NavView, label: string, sym: string) => (
     <button
       className={`nav-item ${view === id ? "active" : ""}`}
       aria-current={view === id ? "page" : undefined}
@@ -126,6 +138,7 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
       </div>
       <nav className="nav" aria-label={t("nav.projects")}>
         {item("projects", t("nav.projects"), "▤")}
+        {item("portfolio", t("nav.portfolio"), "◫")}
         {item("pulse", t("nav.pulse"), "◈")}
       </nav>
       <div className="lang" role="group" aria-label={t("lang.switch")}>
@@ -288,8 +301,30 @@ function ConnectForm({ t, onClose, onDone }: {
   );
 }
 
+// --- Project detail: tabs Overview (VP-2) / Product Map (VP-3) --------------
+function ProjectDetail({ t, id, onBack }: { t: T; id: string; onBack: () => void }) {
+  const [tab, setTab] = useState<"overview" | "map">("overview");
+  return (
+    <>
+      <button className="btn back" onClick={onBack}>← {t("overview.back")}</button>
+      <div className="tabs" role="tablist" aria-label={t("nav.projects")}>
+        <button role="tab" id="tab-overview" aria-selected={tab === "overview"}
+          aria-controls="panel-project" className={`tab ${tab === "overview" ? "active" : ""}`}
+          onClick={() => setTab("overview")}>{t("pm.tab.overview")}</button>
+        <button role="tab" id="tab-map" aria-selected={tab === "map"}
+          aria-controls="panel-project" className={`tab ${tab === "map" ? "active" : ""}`}
+          onClick={() => setTab("map")}>{t("pm.tab.map")}</button>
+      </div>
+      <div id="panel-project" role="tabpanel"
+        aria-labelledby={tab === "overview" ? "tab-overview" : "tab-map"}>
+        {tab === "overview" ? <OverviewView t={t} id={id} /> : <ProductMapView t={t} id={id} />}
+      </div>
+    </>
+  );
+}
+
 // --- Project Overview ------------------------------------------------------
-function OverviewView({ t, id, onBack }: { t: T; id: string; onBack: () => void }) {
+function OverviewView({ t, id }: { t: T; id: string }) {
   const [ov, setOv] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -308,18 +343,12 @@ function OverviewView({ t, id, onBack }: { t: T; id: string; onBack: () => void 
     finally { setBusy(false); }
   };
 
-  if (error && !ov) return (
-    <>
-      <button className="btn back" onClick={onBack}>← {t("overview.back")}</button>
-      <p className="error" role="alert">{error}</p>
-    </>
-  );
+  if (error && !ov) return <p className="error" role="alert">{error}</p>;
   if (!ov) return <p className="muted">{t("common.loading")}</p>;
 
   const bl = ov.baseline;
   return (
     <>
-      <button className="btn back" onClick={onBack}>← {t("overview.back")}</button>
       <header className="page-head">
         <div>
           <h1>{ov.project.name}</h1>
