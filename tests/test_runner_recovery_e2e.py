@@ -5,13 +5,11 @@ INTERRUPTED — задача должна быть реально продолж
 результата без второго writer и без дублей.
 """
 
-import asyncio
 import tempfile
 import unittest
 
-from atlas_test_base import AtlasTestCase  # noqa: F401 (sys.path)
-
 from atlas_runner.recovery_demo import prove_recovery_to_success
+from atlas_test_base import AtlasTestCase  # noqa: F401 (sys.path)
 
 
 class TestRunnerRecoveryE2E(unittest.IsolatedAsyncioTestCase):

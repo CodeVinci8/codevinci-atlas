@@ -19,8 +19,11 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "apps/core"))
 
-from atlas_core.profiles import (ProfileRegistry, check_root_permissions,  # noqa: E402
-                                 create_profile_root)
+from atlas_core.profiles import (  # noqa: E402
+    ProfileRegistry,
+    check_root_permissions,
+    create_profile_root,
+)
 
 
 def main() -> int:

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (lint, tests, migrations)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.1"
+      - name: Установить зависимости (frozen)
+        run: uv sync --frozen
+      - name: ruff (lint)
+        run: uv run ruff check apps tests scripts
+      - name: Миграции из пустой БД
+        env:
+          ATLAS_DATA_DIR: ${{ runner.temp }}/atlas-data
+          ATLAS_CONFIG_FILE: /nonexistent.yaml
+        run: |
+          mkdir -p "$ATLAS_DATA_DIR"
+          uv run alembic upgrade head
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=sorted(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); assert 'audit_events' in t and 'alembic_version' in t, t; print('migration ok:', t)"
+      - name: Юнит/интеграционные тесты (Core+Runner+UDS)
+        run: uv run python -m unittest discover -s tests -p 'test_*.py'
+      - name: git diff --check
+        run: git diff --check HEAD~1 HEAD || git diff --check || true
+
+  web:
+    name: Web (typecheck, i18n, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Включить pnpm
+        run: corepack enable pnpm
+      - name: Установка (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Проверка каталогов локалей
+        run: pnpm check:i18n
+      - name: TypeScript strict
+        run: pnpm typecheck
+      - name: Production-сборка
+        run: pnpm build
+
+  security:
+    name: Секрет-скан
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Полный секрет-скан (дерево + история + durable state)
+        run: PYTHONPATH=apps/core python3 scripts/secret_scan.py

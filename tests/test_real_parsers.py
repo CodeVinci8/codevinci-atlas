@@ -5,10 +5,9 @@
 Гарантирует, что адаптеры извлекают session-id и структурный результат.
 """
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.adapters.real_claude import RealClaudeAdapter
 from atlas_core.adapters.real_codex import RealCodexAdapter
+from atlas_test_base import AtlasTestCase
 
 # Реальный формат codex exec --json (ведущая не-JSON строка присутствует в жизни)
 CODEX_STREAM = "\n".join([

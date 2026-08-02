@@ -1,8 +1,7 @@
 """Юнит-тесты классификации ошибок (Master Spec §12.4)."""
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.errors import ErrorCode, classify
+from atlas_test_base import AtlasTestCase
 
 
 class TestErrorClassification(AtlasTestCase):

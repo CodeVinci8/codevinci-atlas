@@ -5,12 +5,11 @@ import os
 import tempfile
 import unittest
 
-from atlas_test_base import AtlasTestCase  # noqa: F401 (sys.path)
-
 from atlas_runner.client import RunnerClient
 from atlas_runner.journal import RecoveryJournal
 from atlas_runner.protocol import generate_token
-from atlas_runner.server import RunnerServer, RunnerConfig
+from atlas_runner.server import RunnerConfig, RunnerServer
+from atlas_test_base import AtlasTestCase  # noqa: F401 (sys.path)
 
 
 class TestRunnerInterruption(unittest.IsolatedAsyncioTestCase):

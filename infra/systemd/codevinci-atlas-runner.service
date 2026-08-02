@@ -1,0 +1,47 @@
+[Unit]
+Description=CodeVinci Atlas Runner (native host, UDS)
+Documentation=https://github.com/CodeVinci8/codevinci-atlas
+After=network.target
+
+[Service]
+Type=simple
+# Рантайм НЕ от root (Master Spec §7.3, §34): сервисный пользователь atlas.
+User=atlas
+Group=atlas
+# Bridge-группа: Core-контейнер читает токен и подключается к сокету;
+# профильные идентичности в неё НЕ входят (least-privilege §30.2).
+SupplementaryGroups=atlas-bridge
+WorkingDirectory=/opt/CodeVinciAtlas
+Environment=PYTHONPATH=/opt/CodeVinciAtlas/apps/core:/opt/CodeVinciAtlas/apps/runner
+Environment=ATLAS_RUNNER_SOCK=/run/codevinci-atlas/runner.sock
+Environment=ATLAS_RUNNER_TOKEN_FILE=/run/codevinci-atlas/runner.token
+Environment=ATLAS_RUNNER_JOURNAL=/var/lib/codevinci-atlas/runner/journal.jsonl
+Environment=ATLAS_RUNNER_ALLOWED=/var/lib/codevinci-atlas/worktrees:/var/lib/codevinci-atlas/profiles
+Environment=ATLAS_BRIDGE_GROUP=atlas-bridge
+ExecStart=/usr/bin/python3 /opt/CodeVinciAtlas/scripts/runner_host.py
+Restart=on-failure
+RestartSec=2
+
+# Каталог сокета/токена под /run: владелец atlas, 0750.
+# Preserve=yes: инод каталога стабилен между рестартами — иначе systemd
+# пересоздаёт его с новым инодом и bind-mount в контейнер Core рвётся
+# (socket «исчезает» в контейнере). Решение VP1-D3.
+RuntimeDirectory=codevinci-atlas
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+
+# Дроп привилегий в идентичности профилей (VP-5) требует SETUID/SETGID:
+# runuser от non-root НЕ работает («may not be used by non-root users»),
+# поэтому Runner дропает привилегии через Python subprocess(user=/group=)
+# с этими capabilities (решение VP1-D2). Health/UDS их не требуют.
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+
+# Ужесточение окружения.
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

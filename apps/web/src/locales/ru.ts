@@ -1,0 +1,28 @@
+import type { Catalog } from "../i18n";
+
+export const ru: Catalog = {
+  "app.title": "CodeVinci Atlas",
+  "app.subtitle": "Центр управления Codex и Claude",
+  "nav.pulse": "Пульс",
+  "lang.ru": "Русский",
+  "lang.en": "English",
+  "lang.switch": "Язык",
+  "skip.toContent": "Перейти к содержимому",
+  "health.title": "Состояние системы",
+  "health.core": "Core",
+  "health.runner": "Runner",
+  "health.db": "База данных",
+  "health.version": "Версия",
+  "status.READY": "Готов",
+  "status.DEGRADED": "Деградация",
+  "status.OFFLINE": "Недоступен",
+  "status.UNAUTHORIZED": "Отказ авторизации",
+  "status.UNKNOWN": "Неизвестно",
+  "runner.offlineHint": "Runner недоступен: реальные запуски невозможны до восстановления сервиса.",
+  "audit.title": "Аудит",
+  "audit.empty": "Событий пока нет.",
+  "audit.total": "Всего событий",
+  "common.loading": "Загрузка…",
+  "common.error": "Ошибка соединения с Core",
+  "common.refresh": "Обновить",
+};

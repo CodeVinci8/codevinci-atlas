@@ -38,6 +38,8 @@ class RunnerConfig:
     allow_root: bool = False  # прод: systemd User=atlas; VP-0 среда — root
     # uid'ы идентичностей профилей, в которые Runner имеет право дропнуть привилегии.
     allowed_run_as_uids: set[int] = field(default_factory=set)
+    # bridge-группа для доступа Core к сокету/токену (least-privilege §30.2).
+    bridge_group: str | None = None
     heartbeat_s: float = 0.5
     grace_s: float = 2.0
     max_output_bytes: int = 1_000_000
@@ -72,6 +74,15 @@ class RunnerServer:
             sock.unlink()
         self._server = await asyncio.start_unix_server(self._handle, path=str(sock))
         os.chmod(sock, 0o660)  # §7.3 socket 0660
+        # Least-privilege bridge: сокет доступен группе atlas-bridge (Core),
+        # но не профильным идентичностям.
+        if self.cfg.bridge_group:
+            import grp
+            try:
+                gid = grp.getgrnam(self.cfg.bridge_group).gr_gid
+                os.chown(sock, -1, gid)
+            except (KeyError, PermissionError):
+                pass
 
     async def serve_forever(self) -> None:
         assert self._server is not None
@@ -102,8 +113,19 @@ class RunnerServer:
                 await self._handle_run(msg.get("request", {}), writer)
             elif mtype == "interrupt":
                 await self._handle_interrupt(msg.get("request_id", ""), writer)
-            elif mtype == "ping":
-                await self._send(writer, {"type": "pong", "recovered": self.recovered_on_start})
+            elif mtype in ("ping", "health"):
+                await self._send(writer, {
+                    "type": "pong",
+                    "recovered": self.recovered_on_start,
+                    "health": {
+                        "status": "READY",
+                        "version": __import__("atlas_runner").__version__,
+                        "uid": os.geteuid(),
+                        "non_root": os.geteuid() != 0,
+                        "active_jobs": len(self._jobs),
+                        "socket": self.cfg.socket_path,
+                    },
+                })
             else:
                 await self._send(writer, {"type": "error", "code": ErrorCode.OUTPUT_INVALID.value,
                                           "evidence": f"неизвестный тип {mtype}"})

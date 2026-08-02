@@ -2,9 +2,8 @@
 
 import time
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.handoff import build_handoff, verify_handoff
+from atlas_test_base import AtlasTestCase
 
 
 def _mk(**over):

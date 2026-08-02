@@ -11,7 +11,6 @@ import platform
 import shutil
 import subprocess
 
-from . import config
 from .adapters.real_claude import RealClaudeAdapter
 from .adapters.real_codex import RealCodexAdapter
 from .capacity import unknown_capacity

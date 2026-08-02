@@ -1,14 +1,13 @@
 """Восстановление после рестарта Core (Master Spec §7.5, §33 acceptance №7)."""
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.adapters.fake import FakeCodexAdapter, FaultInjection
 from atlas_core.contracts import JobPackage, Provider, Role, RunState
 from atlas_core.handoff import build_checkpoint
 from atlas_core.leases import LeaseStore
-from atlas_core.orchestrator import Core, Candidate
-from atlas_core.profiles import create_profile_root, ProfileState
+from atlas_core.orchestrator import Candidate, Core
+from atlas_core.profiles import ProfileState, create_profile_root
 from atlas_core.store import Store
+from atlas_test_base import AtlasTestCase
 
 
 class TestCoreRestartRecovery(AtlasTestCase):

@@ -31,6 +31,11 @@ if ! getent passwd atlas >/dev/null; then
           --shell /usr/sbin/nologin --gid atlas atlas
 fi
 
+# Least-privilege bridge-группа: доступ Core к сокету/токену Runner.
+# Профильные идентичности в неё НЕ входят (не читают runner-токен).
+if ! getent group atlas-bridge >/dev/null; then groupadd --system atlas-bridge; fi
+usermod -a -G atlas-bridge atlas || true
+
 # Per-profile идентичности (в т.ч. в группе atlas для traverse)
 declare -A PROFILE_USER=(
   [codex-plus-01]=atlas-cx01 [codex-plus-02]=atlas-cx02

@@ -3,14 +3,13 @@
 Master Spec §5.3, §33 acceptance №3,4,5,6. Доказывается для обоих провайдеров.
 """
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.adapters.fake import FakeClaudeAdapter, FakeCodexAdapter, FaultInjection
 from atlas_core.contracts import JobPackage, Provider, Role
 from atlas_core.leases import LeaseStore
-from atlas_core.orchestrator import Core, Candidate
-from atlas_core.profiles import create_profile_root, ProfileState
+from atlas_core.orchestrator import Candidate, Core
+from atlas_core.profiles import ProfileState, create_profile_root
 from atlas_core.store import Store
+from atlas_test_base import AtlasTestCase
 
 
 class TestRateLimitSwitch(AtlasTestCase):

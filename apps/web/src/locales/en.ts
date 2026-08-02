@@ -1,0 +1,28 @@
+import type { Catalog } from "../i18n";
+
+export const en: Catalog = {
+  "app.title": "CodeVinci Atlas",
+  "app.subtitle": "Codex & Claude control center",
+  "nav.pulse": "Pulse",
+  "lang.ru": "Русский",
+  "lang.en": "English",
+  "lang.switch": "Language",
+  "skip.toContent": "Skip to content",
+  "health.title": "System health",
+  "health.core": "Core",
+  "health.runner": "Runner",
+  "health.db": "Database",
+  "health.version": "Version",
+  "status.READY": "Ready",
+  "status.DEGRADED": "Degraded",
+  "status.OFFLINE": "Offline",
+  "status.UNAUTHORIZED": "Unauthorized",
+  "status.UNKNOWN": "Unknown",
+  "runner.offlineHint": "Runner is offline: real runs are unavailable until the service recovers.",
+  "audit.title": "Audit",
+  "audit.empty": "No events yet.",
+  "audit.total": "Total events",
+  "common.loading": "Loading…",
+  "common.error": "Cannot reach Core",
+  "common.refresh": "Refresh",
+};

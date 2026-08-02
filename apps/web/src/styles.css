@@ -1,0 +1,61 @@
+/* Минимальная тема Ember (Master Spec §28), light/dark-aware. */
+:root {
+  --bg: #0b0b0c; --surface: #171719; --border: #2a2928;
+  --text: #f2eee8; --muted: #aaa49c; --ember: #f28a3d;
+  --ok: #54b982; --warn: #e2a84b; --danger: #df6262;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f7f5f1; --surface: #fff; --border: #e2ddd4; --text: #1b1a18; --muted: #6b655c; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+
+.skip-link { position: absolute; left: -999px; top: 0; background: var(--ember);
+  color: #111; padding: 8px 12px; z-index: 10; }
+.skip-link:focus { left: 8px; top: 8px; }
+
+.topbar { display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 20px; border-bottom: 1px solid var(--border); gap: 16px; }
+.brand { display: flex; flex-direction: column; }
+.brand .muted { font-size: 13px; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+.lang button { background: transparent; color: var(--text); border: 1px solid var(--border);
+  padding: 4px 10px; cursor: pointer; border-radius: 6px; margin-left: 6px; font-size: 13px; }
+.lang button[aria-pressed="true"] { background: var(--ember); color: #111; border-color: var(--ember); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+
+.content { max-width: 900px; margin: 24px auto; padding: 0 20px;
+  display: grid; gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; }
+h1 { font-size: 20px; margin: 0 0 12px; } h2 { font-size: 16px; margin: 0 0 12px; }
+.refresh { background: transparent; border: 1px solid var(--border); color: var(--text);
+  padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+
+.health-grid { list-style: none; margin: 0; padding: 0; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.health-grid li { display: flex; flex-direction: column; gap: 6px;
+  padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+.badge { display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; width: fit-content; }
+.badge-READY { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.badge-DEGRADED { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.badge-OFFLINE, .badge-UNAUTHORIZED { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.badge-UNKNOWN { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }
+
+.hint { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); border-radius: 4px; }
+.error { color: var(--danger); }
+
+table.audit { width: 100%; border-collapse: collapse; }
+table.audit th, table.audit td { text-align: left; padding: 8px 10px;
+  border-bottom: 1px solid var(--border); font-size: 14px; }
+table.audit th { color: var(--muted); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

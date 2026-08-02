@@ -15,8 +15,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "apps/core"))
 
-from atlas_core.secret_scan import scan_repo  # noqa: E402
 from atlas_core import config  # noqa: E402
+from atlas_core.secret_scan import scan_repo  # noqa: E402
 
 
 def main() -> int:

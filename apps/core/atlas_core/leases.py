@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from .errors import AtlasError, ErrorCode, ClassifiedError, next_action_for
+from .errors import AtlasError, ClassifiedError, ErrorCode, next_action_for
 from .ids import new_id, utcnow_iso
 from .store import Store
 

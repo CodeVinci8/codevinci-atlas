@@ -82,6 +82,43 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   history сканируется точными токен-паттернами; настроенная git-идентичность
   владельца не считается утечкой. Реальный лимит не исчерпывался.
 
+## Технические решения VP-1
+
+- **VP1-D1 (стек).** VP-1 вводит полноценный стек: FastAPI + SQLAlchemy 2.x +
+  Alembic (SQLite WAL) для Core; Vite + React 19 + TS strict для Web; `uv` и
+  `pnpm` с локами. Таблицы создаются ТОЛЬКО Alembic (в проде — entrypoint
+  `alembic upgrade head`), не автосозданием. VP-0-модули (изоляция, leases,
+  адаптеры, redaction) переиспользованы без изменения контрактов.
+- **VP1-D2 (дроп привилегий: runuser неприменим от non-root).** Проверено на
+  реальном пути: `runuser` от non-root возвращает «may not be used by non-root
+  users»; Python `subprocess(user=)` от non-root без caps → PermissionError.
+  Поэтому production Runner (systemd `User=atlas`) дропает привилегии в
+  идентичность профиля через **Python `subprocess(user=/group=)` + systemd
+  `AmbientCapabilities=CAP_SETUID CAP_SETGID`**, а НЕ через `runuser`. `runuser`
+  остаётся только для dev/CI-инструментов, работающих от root. Health/UDS
+  привилегий не требуют. Граница безопасности: capabilities ограничены
+  `CapabilityBoundingSet`; профильные идентичности не входят в bridge-группу.
+- **VP1-D3 (least-privilege bridge + стабильный runtime-каталог).** Core-контейнер
+  (non-root) аутентифицируется к host Runner через UDS: сокет `0660` и токен
+  `0640`, оба во владении группы **`atlas-bridge`**; Core добавлен в эту группу
+  (`group_add`), профильные идентичности — нет (не читают runner-токен, не
+  подключаются к сокету — доказано). Каталог `/run/codevinci-atlas` монтируется
+  в Core read-only. `RuntimeDirectoryPreserve=yes` обязателен: иначе рестарт
+  Runner пересоздаёт каталог с новым инодом и bind-mount в контейнере рвётся.
+- **VP1-D4 (non-root контейнеры).** Core — образ с непривилегированным
+  пользователем (UID/GID = host `atlas` через build-args, чтобы совпасть с
+  владельцем смонтированных путей); Web — `nginxinc/nginx-unprivileged` (uid
+  101, порт 8080). Web слушает только `127.0.0.1:3210`; Core не публикуется.
+- **VP1-D5 (воспроизводимая Web-сборка).** pnpm 11 блокирует build-скрипты;
+  esbuild (нужен Vite) разрешён неинтерактивно через `allowBuilds: {esbuild: true}`
+  в `pnpm-workspace.yaml`. `pnpm install --frozen-lockfile` и `pnpm build` идут
+  из чистого состояния без правки `node_modules`.
+
+## VP-1 — ЗАВЕРШЁН (17/17)
+
+Приёмка `scripts/run_vp1_acceptance.py`: 17/17 PASS против реально развёрнутого
+стека (Compose Core/Web + systemd Runner). Evidence — `var/artifacts/vp1/`.
+
 ## Требуют отдельного подтверждения владельца
 
 - Создание/использование GitHub-репозитория за пределами read-only (репозиторий
