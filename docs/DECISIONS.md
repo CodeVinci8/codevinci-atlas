@@ -313,9 +313,22 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 
 Приёмка `scripts/run_vp5_acceptance.py`: **26/26** (детерминированно, реальная
 миграция `0005` + реальные сервисы + ASGI TestClient + fake-адаптеры §32.2).
-Полная Python-регрессия 243 OK. Evidence + SHA-256 — `var/artifacts/vp5/`.
-**Реальный Planner→Builder→Reviewer на подписке — честно pending** до
-owner-авторизации. Пуша/PR/merge VP-5 ещё нет.
+Полная Python-регрессия 247 OK. Evidence + SHA-256 — `var/artifacts/vp5/`.
+
+- **VP5-D7 (реальный provider-E2E — ВЫПОЛНЕН).** `scripts/run_vp5_real_e2e.py`:
+  реальный Codex Planner (`codex-plus-01`) → Claude Builder (`claude-pro-01`) →
+  независимый Codex Reviewer (`codex-plus-02`) через нативные адаптеры Atlas
+  (runuser + изолированный env под идентичностью профиля) на СИНТЕТИЧЕСКОМ
+  git-репо. **3/6** подписочных вызовов. Реальный артефакт `calc.py`
+  (`def add(a,b): return a+b`, sha256 в evidence) произведён реальным Claude,
+  отревьюен реальным независимым Codex → **PASS**. Один writer
+  (`max_concurrent_writers=1`), Reviewer другой профиль+сессия, `fix_loops=0`,
+  без transcript/credentials (secret-scan чист). Evidence —
+  `var/artifacts/vp5/real_e2e/`. Наблюдение: `claude auth status --json` может
+  сообщать `loggedIn=true` при истёкшем OAuth-токене (первый прогон дал
+  транзиентный `401 OAuth expired`, корректно классифицирован как AUTH_EXPIRED,
+  повторный прогон прошёл). Реальный и детерминированный уровни — раздельные
+  evidence.
 
 ## Требуют отдельного подтверждения владельца
 
