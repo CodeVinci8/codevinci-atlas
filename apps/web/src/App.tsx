@@ -5,6 +5,7 @@ import {
 } from "./api";
 import { catalogs, detectInitialLocale, type Locale, type LocaleKey } from "./i18n";
 import { PortfolioView, ProductMapView } from "./productmap";
+import { WorkOrdersView } from "./workorders";
 
 type NavView = "projects" | "pulse" | "portfolio";
 
@@ -303,7 +304,8 @@ function ConnectForm({ t, onClose, onDone }: {
 
 // --- Project detail: tabs Overview (VP-2) / Product Map (VP-3) --------------
 function ProjectDetail({ t, id, onBack }: { t: T; id: string; onBack: () => void }) {
-  const [tab, setTab] = useState<"overview" | "map">("overview");
+  const [tab, setTab] = useState<"overview" | "map" | "workorders">("overview");
+  const tabId = `tab-${tab}`;
   return (
     <>
       <button className="btn back" onClick={onBack}>← {t("overview.back")}</button>
@@ -314,10 +316,14 @@ function ProjectDetail({ t, id, onBack }: { t: T; id: string; onBack: () => void
         <button role="tab" id="tab-map" aria-selected={tab === "map"}
           aria-controls="panel-project" className={`tab ${tab === "map" ? "active" : ""}`}
           onClick={() => setTab("map")}>{t("pm.tab.map")}</button>
+        <button role="tab" id="tab-workorders" aria-selected={tab === "workorders"}
+          aria-controls="panel-project" className={`tab ${tab === "workorders" ? "active" : ""}`}
+          onClick={() => setTab("workorders")}>{t("pm.tab.workorders")}</button>
       </div>
-      <div id="panel-project" role="tabpanel"
-        aria-labelledby={tab === "overview" ? "tab-overview" : "tab-map"}>
-        {tab === "overview" ? <OverviewView t={t} id={id} /> : <ProductMapView t={t} id={id} />}
+      <div id="panel-project" role="tabpanel" aria-labelledby={tabId}>
+        {tab === "overview" ? <OverviewView t={t} id={id} />
+          : tab === "map" ? <ProductMapView t={t} id={id} />
+          : <WorkOrdersView t={t} id={id} />}
       </div>
     </>
   );

@@ -227,4 +227,106 @@ export const api = {
     getJSON<BriefDiff>(`/api/v1/projects/${id}/briefs/diff?from=${from}&to=${to}`),
   portfolio: () => getJSON<{ projects: PortfolioRow[] }>("/api/v1/portfolio"),
   exportUrl: (id: string, format: "json" | "md") => `/api/v1/projects/${id}/export?format=${format}`,
+
+  // --- VP-4 Work Orders & Context ---
+  listVpSpecs: (id: string) => getJSON<{ vp_specs: VpSpecSummary[] }>(`/api/v1/projects/${id}/vp-specs`),
+  getVpSpec: (id: string, sid: string) => getJSON<VpSpecFull>(`/api/v1/projects/${id}/vp-specs/${sid}`),
+  createVpSpec: (id: string, vpKey: string) =>
+    sendJSON<VpSpecFull>(`/api/v1/projects/${id}/vp-specs`, "POST", { vp_key: vpKey }),
+  listWorkOrders: (id: string) =>
+    getJSON<{ work_orders: WorkOrderRow[] }>(`/api/v1/projects/${id}/work-orders`),
+  getWorkOrder: (id: string, wid: string) =>
+    getJSON<WorkOrderFull>(`/api/v1/projects/${id}/work-orders/${wid}`),
+  createWorkOrder: (id: string, body: { vp_spec_id: string; goal: string; role?: string }) =>
+    sendJSON<WorkOrderFull>(`/api/v1/projects/${id}/work-orders`, "POST", body),
+  transitionWo: (id: string, wid: string, toStatus: string, expected: number) =>
+    sendJSON<WorkOrderFull>(`/api/v1/projects/${id}/work-orders/${wid}/transition`, "POST",
+      { to_status: toStatus, expected_version: expected }),
+  buildJobPackage: (id: string, wid: string) =>
+    sendJSON<JobPackage>(`/api/v1/projects/${id}/work-orders/${wid}/job-package`, "POST"),
+  buildCheckpoint: (id: string, wid: string, body: Record<string, unknown>) =>
+    sendJSON<CheckpointRow>(`/api/v1/projects/${id}/work-orders/${wid}/checkpoints`, "POST", body),
+  buildHandoff: (id: string, wid: string, checkpointId: string) =>
+    sendJSON<HandoffRow>(`/api/v1/projects/${id}/work-orders/${wid}/handoffs`, "POST",
+      { checkpoint_id: checkpointId }),
+  listHandoffs: (id: string, wid: string) =>
+    getJSON<{ handoffs: HandoffRow[] }>(`/api/v1/projects/${id}/handoffs?work_order_id=${wid}`),
+  reconstruct: (id: string, hid: string) =>
+    sendJSON<ReconstructResult>(`/api/v1/projects/${id}/handoffs/${hid}/reconstruct`, "POST", {}),
+  evaluate: (id: string, woIds: string[]) =>
+    sendJSON<OptimizerDecision>(`/api/v1/projects/${id}/optimizer/evaluate`, "POST",
+      { work_order_ids: woIds }),
+  mergePreview: (id: string, woIds: string[]) =>
+    sendJSON<MergePreview>(`/api/v1/projects/${id}/optimizer/merge/preview`, "POST",
+      { work_order_ids: woIds }),
+  listCheckpoints: (id: string, wid: string) =>
+    getJSON<{ checkpoints: CheckpointRow[] }>(`/api/v1/projects/${id}/checkpoints?work_order_id=${wid}`),
 };
+
+// --- VP-4 types ------------------------------------------------------------
+export type WoStatus =
+  | "draft" | "ready" | "active" | "checkpointed" | "handoff_ready"
+  | "blocked" | "completed" | "cancelled";
+
+export interface SpecBinding {
+  approval_id: string; brief_id?: string; brief_hash: string;
+  map_version_id?: string; map_hash: string; envelope_hash: string;
+  decisions_hash?: string; baseline_branch: string; baseline_head: string;
+}
+export interface VpSpecSummary {
+  id: string; vp_key: string; version: number; status: string;
+  content_hash: string; created_at: string; binding: SpecBinding;
+}
+export interface Criterion { id: string; text: string; required: boolean; shared?: boolean; source?: string; }
+export interface VpSpecFull extends VpSpecSummary {
+  content: {
+    result: string; definition_of_done: string[]; acceptance_criteria: Criterion[];
+    immutable_constraints: string[]; out_of_scope: string[]; stop_conditions: string[];
+    required_checks: { id: string; name: string; command: string }[];
+    exact_next_action: string; user_scenario: string;
+  };
+}
+export interface WorkOrderRow {
+  id: string; vp_spec_id: string; vp_key: string; role: string; status: WoStatus;
+  goal: string; origin: string; version: number; content_hash: string;
+  lease_active: boolean; writer_holder: string; created_at: string; binding: SpecBinding;
+}
+export interface WorkOrderFull extends WorkOrderRow {
+  content: {
+    role: string; goal: string; source_of_truth: string[];
+    scope: { files: string[]; components: string[] }; out_of_scope: string[];
+    acceptance_criteria: Criterion[]; required_checks: { id: string; name: string }[];
+    capabilities: string[]; prohibited_actions: string[]; stop_conditions: string[];
+    test_impact: string[]; exact_next_action: string; report_schema: string;
+  };
+  history: { from: string; to: string; reason: string; note: string; at: string }[];
+}
+export interface JobPackage {
+  id: string; work_order_id: string; content_hash: string; byte_size: number;
+  compact: boolean; counts: Record<string, number>; capabilities: string[];
+  provenance: { source: string; ref: string; hash: string }[]; content: Record<string, unknown>;
+}
+export interface CheckpointRow {
+  id: string; work_order_id?: string; content_hash: string; current_head: string;
+  cause?: string; remaining_criteria?: string[]; completed_criteria?: string[]; created_at: string;
+}
+export interface HandoffRow {
+  id: string; work_order_id: string; content_hash: string; status: string;
+  compact: boolean; current_head?: string; created_at: string;
+  content?: { acceptance_matrix?: { id: string; status: string }[] };
+}
+export interface ReconstructResult {
+  ok: boolean; handoff_id: string; run_result_valid?: boolean; isolated?: boolean;
+  stage?: string; rejections?: { code: string; reason: string }[];
+  reconstruction?: Record<string, unknown>; next_action?: string;
+  ack?: { result: string; content_hash: string } | null;
+}
+export interface OptimizerDecision {
+  id?: string; decision: string; reason_code: string; explanation?: string;
+  affected_work_orders?: string[]; exact_next_action: string;
+}
+export interface MergePreview {
+  compatible: boolean; reason: string; work_order_ids: string[];
+  criterion_mapping: Record<string, string[]>; merged_criteria: Criterion[];
+  shared_criteria: string[]; criterion_conservation: boolean;
+}
