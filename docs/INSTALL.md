@@ -1,7 +1,63 @@
-# INSTALL — установка и запуск (VP-0)
+# INSTALL — установка и запуск
 
-Полная Compose/systemd-установка — VP-1. Для VP-0 достаточно Python 3.12+
-(проверено на 3.14). uv/pnpm/Docker для доказательства VP-0 не нужны.
+🇬🇧 English: [`en/INSTALL.md`](en/INSTALL.md).
+
+## VP-1 — Compose Core/Web + systemd Runner
+
+Требования: Linux + systemd, Docker Engine + Compose plugin, Python 3.12+,
+`uv` и `pnpm` (для CLI/сборки вне контейнеров).
+
+```bash
+cd /opt/CodeVinciAtlas
+
+# 1) runtime-идентичности, bridge-группа, каталоги (root, идемпотентно)
+sudo bash scripts/atlas-runtime-setup.sh
+sudo PYTHONPATH=apps/core python3 scripts/profile-init.py
+
+# 2) systemd Runner (нативный host-процесс, User=atlas, non-root)
+sudo cp infra/systemd/codevinci-atlas-runner.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now codevinci-atlas-runner.service
+systemctl is-active codevinci-atlas-runner.service   # active
+
+# 3) .env: UID/GID host-пользователя atlas и bridge-группы
+printf 'ATLAS_UID=%s\nATLAS_GID=%s\nATLAS_BRIDGE_GID=%s\n' \
+  "$(id -u atlas)" "$(getent group atlas | cut -d: -f3)" \
+  "$(getent group atlas-bridge | cut -d: -f3)" > .env
+
+# 4) Compose Core/Web (миграции применяются entrypoint'ом)
+docker compose up -d --build
+docker compose ps          # core/web healthy
+
+# 5) приёмка VP-1 (17/17)
+python3 scripts/run_vp1_acceptance.py
+```
+
+### Доступ через SSH-туннель (без публичного порта, §7.4)
+
+Web слушает только `127.0.0.1:3210` на сервере. С локальной машины:
+
+```bash
+ssh -L 3210:127.0.0.1:3210 <user>@<server>
+# затем открыть в браузере: http://127.0.0.1:3210
+```
+
+Проверка на сервере: `curl -s http://127.0.0.1:3210/api/v1/health`.
+
+### CLI
+
+```bash
+uv run atlas doctor    # зависимости/миграции/Runner/права/профили (без секретов)
+uv run atlas status    # краткое состояние Core/Runner/БД
+uv run atlas backup     # онлайн-backup SQLite + манифест SHA-256 + секрет-скан
+```
+
+---
+
+# INSTALL (VP-0)
+
+Для доказательства VP-0 достаточно Python 3.12+ (проверено на 3.14).
+uv/pnpm/Docker для VP-0 не нужны.
 
 ## Требования VP-0
 
@@ -53,7 +109,7 @@ scripts/login-gate.sh
 PYTHONPATH=apps/core:apps/runner python3 scripts/manual_real_probe.py
 ```
 
-## Прод-пути (целевые, VP-1)
+## Прод-пути (VP-1)
 
 ```text
 /opt/CodeVinciAtlas/        # checkout
@@ -67,7 +123,8 @@ PYTHONPATH=apps/core:apps/runner python3 scripts/manual_real_probe.py
 рантайм не от root (в VP-0-среде Runner запускается с явным `allow_root`, см.
 `docs/DECISIONS.md` VP0-D4).
 
-## Установка (целевая, VP-1)
+## Обновление стека (VP-1)
 
 Docker Compose управляет Core/Web; systemd (`User=atlas`) — Runner. Порядок
-обновления: backup → migrate → health → switch.
+обновления: backup → migrate → health → switch (детали и restore —
+[`OPERATIONS.md`](OPERATIONS.md)).
