@@ -72,6 +72,20 @@ class RealClaudeAdapter:
         return [exe, "-p", "--resume", session_id, "--output-format", "stream-json",
                 "--verbose", self._render_prompt(job)]
 
+    def build_fresh_argv(self, job: JobPackage, *, origin_session_id: str | None = None,
+                         executable: str | None = None) -> list[str]:
+        """FRESH_WITH_HANDOFF (§12.3): новая сессия из принятого HandoffPackage.
+
+        При наличии origin-сессии — ``--fork-session`` (новый session-id из
+        оригинала, безопасный ack handoff); иначе — свежий запуск с новым
+        ``--session-id``. Prompt несёт компактный handoff-контекст (не старый чат).
+        """
+        exe = executable or self.executable
+        if origin_session_id:
+            return [exe, "-p", "--resume", origin_session_id, "--fork-session",
+                    "--output-format", "stream-json", "--verbose", self._render_prompt(job)]
+        return self.build_start_argv(job, exe)
+
     def _render_prompt(self, job: JobPackage) -> str:
         return job.goal
 

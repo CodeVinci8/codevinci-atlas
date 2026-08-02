@@ -81,6 +81,11 @@ class RealCodexAdapter:
         argv += [self._render_prompt(job)]
         return argv
 
+    def build_fresh_argv(self, job: JobPackage, executable: str | None = None) -> list[str]:
+        """FRESH_WITH_HANDOFF (§12.3): для Codex свежая сессия — это новый
+        ``codex exec`` с компактным handoff-контекстом в prompt (не resume)."""
+        return self.build_start_argv(job, executable or self._resolve_exe(executable))
+
     def _render_prompt(self, job: JobPackage) -> str:
         return job.goal  # компактный prompt, без полного chat/repo (§16.3)
 
