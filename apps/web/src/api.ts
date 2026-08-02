@@ -350,8 +350,9 @@ export interface SystemSummary {
   host_uptime_s: number | null;
   services: Record<string, { status: string; uptime_s: number | null; note?: string }>;
   backup_age_s: number | null;
-  runs: { active: number; queued: number; paused: number; owner_required: number };
-  leases: { worktree_writers: number; profile_leases: number };
+  runs: { active: number | null; queued: number | null; paused: number | null;
+          owner_required: number | null; status?: string };
+  leases: { worktree_writers: number | null; profile_leases: number | null; status?: string };
 }
 
 // --- VP-4 types ------------------------------------------------------------

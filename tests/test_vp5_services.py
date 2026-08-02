@@ -140,6 +140,40 @@ class TestSystemSummary(VP5SvcBase):
         self.assertIn("cpu", summ)
         self.assertIn("runs", summ)
         self.assertEqual(summ["services"]["web"]["status"], "UNKNOWN")
+        # Полная схема есть → runs/leases считаются (status OK).
+        self.assertEqual(summ["runs"]["status"], "OK")
+        self.assertEqual(summ["leases"]["status"], "OK")
+
+    def test_pre_0005_schema_partial_not_crash(self):
+        # БД без VP-5 таблиц (напр. до применения 0005): partial None, без крэша,
+        # НЕ фикция (status PARTIAL, а не выдуманные нули).
+        from atlas_core.db import get_engine
+        from atlas_core.system_summary import system_summary
+        with get_engine().begin() as c:
+            c.exec_driver_sql("DROP TABLE IF EXISTS runs")
+            c.exec_driver_sql("DROP TABLE IF EXISTS run_leases")
+        summ = system_summary(self.settings)
+        self.assertEqual(summ["runs"]["status"], "PARTIAL")
+        self.assertIsNone(summ["runs"]["active"])
+        self.assertEqual(summ["leases"]["status"], "PARTIAL")
+        self.assertIsNone(summ["leases"]["profile_leases"])
+        # worktree_leases всё ещё есть → сам счётчик не None, но общий status PARTIAL.
+        self.assertIsNotNone(summ["leases"]["worktree_writers"])
+
+    def test_real_db_failure_is_error_not_unknown(self):
+        # Настоящий сбой БД (движок закрыт/недоступен) → ERROR, а не молчаливый partial.
+        from atlas_core import db as dbmod
+        from atlas_core.system_summary import _run_counts
+        saved = dbmod._Session
+        try:
+            def _boom():
+                raise RuntimeError("db connection lost")
+            dbmod._Session = _boom  # session_scope() поднимет реальный сбой
+            rc = _run_counts()
+            self.assertEqual(rc["status"], "ERROR")
+            self.assertIsNone(rc["active"])
+        finally:
+            dbmod._Session = saved
 
 
 if __name__ == "__main__":

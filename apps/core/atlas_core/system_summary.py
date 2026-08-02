@@ -122,8 +122,35 @@ def _db_migration() -> str | None:
         return None
 
 
+def _is_missing_table(exc: Exception) -> bool:
+    """Точно отличить «таблицы ещё нет» (до 0005) от реального сбоя БД."""
+    from sqlalchemy.exc import OperationalError
+    if not isinstance(exc, OperationalError):
+        return False
+    return "no such table" in str(getattr(exc, "orig", exc)).lower()
+
+
+def _table_present(name: str) -> bool | None:
+    """True/False если удалось проверить; None если сама проверка не прошла (БД сломана)."""
+    from sqlalchemy import text
+    try:
+        with session_scope() as s:
+            row = s.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"),
+                            {"n": name}).first()
+        return row is not None
+    except Exception:  # noqa: BLE001 — БД недоступна/повреждена
+        return None
+
+
 def _run_counts() -> dict:
-    # Робастно к БД без VP-5 таблиц (напр. до применения 0005): partial, не фикция.
+    # status: OK | PARTIAL (нет таблицы, напр. до 0005) | ERROR (реальный сбой БД).
+    present = _table_present("runs")
+    if present is None:
+        return {"active": None, "queued": None, "paused": None, "owner_required": None,
+                "status": "ERROR", "error": "db unavailable"}
+    if present is False:
+        return {"active": None, "queued": None, "paused": None, "owner_required": None,
+                "status": "PARTIAL"}
     try:
         with session_scope() as s:
             rows = s.execute(select(Run.state, func.count()).group_by(Run.state)).all()
@@ -133,20 +160,39 @@ def _run_counts() -> dict:
             "queued": by.get("QUEUED", 0),
             "paused": by.get("PAUSED", 0),
             "owner_required": by.get("OWNER_REQUIRED", 0),
+            "status": "OK",
         }
-    except Exception:  # noqa: BLE001 — таблицы ещё нет
-        return {"active": None, "queued": None, "paused": None, "owner_required": None}
+    except Exception as exc:  # noqa: BLE001 — таблица есть, но запрос упал → реальный сбой
+        from .redaction import redact
+        if _is_missing_table(exc):
+            return {"active": None, "queued": None, "paused": None, "owner_required": None,
+                    "status": "PARTIAL"}
+        return {"active": None, "queued": None, "paused": None, "owner_required": None,
+                "status": "ERROR", "error": redact(str(exc))[:80]}
 
 
 def _lease_counts() -> dict:
-    def _count(model) -> int | None:
+    from .redaction import redact
+
+    def _count(model, table: str):
+        present = _table_present(table)
+        if present is None:
+            return None, "ERROR"
+        if present is False:
+            return None, "PARTIAL"
         try:
             with session_scope() as s:
-                return int(s.execute(select(func.count()).select_from(model)
-                                     .where(model.released_at == "")).scalar_one())
-        except Exception:  # noqa: BLE001 — таблицы ещё нет
-            return None
-    return {"worktree_writers": _count(WorktreeLease), "profile_leases": _count(RunLease)}
+                n = int(s.execute(select(func.count()).select_from(model)
+                                  .where(model.released_at == "")).scalar_one())
+            return n, "OK"
+        except Exception as exc:  # noqa: BLE001
+            if _is_missing_table(exc):
+                return None, "PARTIAL"
+            return None, f"ERROR:{redact(str(exc))[:60]}"
+    w, ws = _count(WorktreeLease, "worktree_leases")
+    p, ps = _count(RunLease, "run_leases")
+    status = "OK" if ws == "OK" and ps == "OK" else ("PARTIAL" if "ERROR" not in (ws + ps) else "ERROR")
+    return {"worktree_writers": w, "profile_leases": p, "status": status}
 
 
 def _runner(settings) -> dict:

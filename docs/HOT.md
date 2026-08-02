@@ -16,8 +16,16 @@
   реконструкция внутри Core-образа, ротация с одним writer, compact-fallback,
   Work Orders UI RU/EN; merged PR #6 squash `7a3f82d`, CI head `280ee35`; живая
   БД на `0004_work_orders`).
-- **Активного VP нет.** Следующий гейт — VP-5 (Agent Pipeline, §38), **не
-  начат** (отдельное решение владельца).
+- **VP-5 — Agent Pipeline: АКТИВЕН, локально реализован** (ветка
+  `atlas/vp-5-agent-pipeline`, не запушена). Миграция `0005_agent_pipeline`
+  (16 таблиц), router без silent fallback, RunService (lifecycle/idempotency/
+  optimistic), one-writer (worktree+profile lease), PipelineService
+  (Planner→Builder→независимый Reviewer, fix-loop, rate-limit/auth/interruption),
+  адаптеры (3 session-семантики: EXACT_RESUME/FORK_SESSION/FRESH_WITH_HANDOFF),
+  API /runs·/profiles·/models·/system/summary, Web (Runs/Profiles/Pulse/RU-EN
+  segmented). Приёмка `run_vp5_acceptance.py` **26/26**; полная Python-регрессия
+  **243 OK**; Web tsc+build+i18n 452/452 ✓. **Реальный provider-E2E pending**
+  (owner-gate). Пуша/PR нет.
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
   Runner READY.
 - **Профили:** 4 реальных, авторизованы; per-profile идентичности
