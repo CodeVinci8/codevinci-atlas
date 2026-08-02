@@ -1,0 +1,56 @@
+# CodeVinci Atlas — Compose управляет ТОЛЬКО Core и Web (Master Spec §7.2, §34).
+# Runner остаётся host systemd-сервисом (нативный доступ к CLI/auth-root).
+#
+# Установка UID/GID atlas хоста в .env (ATLAS_UID/ATLAS_GID/ATLAS_BRIDGE_GID),
+# чтобы контейнер Core имел доступ к смонтированному сокету/токену Runner.
+
+services:
+  core:
+    build:
+      context: .
+      dockerfile: infra/docker/core.Dockerfile
+      args:
+        ATLAS_UID: ${ATLAS_UID:-10001}
+        ATLAS_GID: ${ATLAS_GID:-10001}
+    # НЕ от root; членство в bridge-группе для доступа к сокету/токену Runner.
+    user: "${ATLAS_UID:-10001}:${ATLAS_GID:-10001}"
+    group_add:
+      - "${ATLAS_BRIDGE_GID:-978}"
+    environment:
+      ATLAS_ENV: production
+      ATLAS_DATA_DIR: /var/lib/codevinci-atlas
+      ATLAS_RUNNER_SOCKET: /run/codevinci-atlas/runner.sock
+      ATLAS_RUNNER_TOKEN_FILE: /run/codevinci-atlas/runner.token
+      ATLAS_WEB_ORIGIN: http://127.0.0.1:3210
+    volumes:
+      - /var/lib/codevinci-atlas:/var/lib/codevinci-atlas
+      # Bridge к host Runner: только каталог сокета/токена, read-only.
+      - /run/codevinci-atlas:/run/codevinci-atlas:ro
+    # Core НЕ публикуется наружу (только внутренняя сеть Compose).
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: on-failure
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    # Только loopback:3210 → контейнер:8080 (§7.4). Публичного порта нет.
+    ports:
+      - "127.0.0.1:3210:8080"
+    depends_on:
+      core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: on-failure

@@ -20,11 +20,27 @@ def generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def write_token_file(path: str | os.PathLike, token: str) -> None:
+def write_token_file(path: str | os.PathLike, token: str, *, group: str | None = None) -> None:
+    """Записать request-token.
+
+    По умолчанию 0600 (только владелец). Если задана bridge-группа (для
+    доступа Core-контейнера) — 0640 atlas:<group>: члены группы читают, но не
+    пишут; профильные идентичности в эту группу НЕ входят (§30.2).
+    """
+
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as fh:
         fh.write(token)
+    if group:
+        import grp
+        try:
+            gid = grp.getgrnam(group).gr_gid
+            os.chown(p, -1, gid)
+            os.chmod(p, 0o640)  # владелец rw, группа r
+            return
+        except (KeyError, PermissionError):
+            pass
     os.chmod(p, 0o600)  # только владелец (§7.3 credentials не шире 0600)
 
 

@@ -1,10 +1,9 @@
 """Честная ёмкость UNKNOWN и защита БД от секретов (Master Spec §11.6, §23.2)."""
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.capacity import CapacitySource, CapacityStatus, unknown_capacity
 from atlas_core.redaction import SECRET_MARKER, scan_paths
 from atlas_core.store import SecretLeakError, Store
+from atlas_test_base import AtlasTestCase
 
 
 class TestCapacityUnknown(AtlasTestCase):

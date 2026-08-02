@@ -2,10 +2,14 @@
 
 import os
 
+from atlas_core.redaction import (
+    SECRET_MARKER,
+    contains_secret,
+    redact,
+    scan_for_secrets,
+    scan_paths,
+)
 from atlas_test_base import AtlasTestCase
-
-from atlas_core.redaction import (SECRET_MARKER, contains_secret, redact,
-                                  scan_for_secrets, scan_paths)
 
 
 class TestRedaction(AtlasTestCase):

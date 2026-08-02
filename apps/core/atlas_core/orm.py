@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, func
+from sqlalchemy import String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 

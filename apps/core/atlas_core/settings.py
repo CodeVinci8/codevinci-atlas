@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FORBIDDEN_KEYS = ("token", "cookie", "api_key", "apikey", "secret", "password", "credential")

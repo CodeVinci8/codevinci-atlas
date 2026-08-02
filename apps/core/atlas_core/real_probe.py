@@ -132,7 +132,7 @@ def probe_provider(provider: str, prof_a: Profile, prof_b: Profile, store: Store
     ckpt = build_checkpoint(project_id="codevinci-atlas", vp_id="VP-0", branch="atlas/vp-0",
                             head=session_a, status_porcelain="", cause=f"{provider} A→B real",
                             profile_alias=prof_a.alias, session_id=session_a)
-    cid = store.save_checkpoint(ckpt.to_dict())
+    store.save_checkpoint(ckpt.to_dict())
     handoff = build_handoff(
         project_id="codevinci-atlas", vp_id="VP-0", goal="Завершить ограниченную задачу шагом B",
         immutable_constraints=["один writer", "без общих credentials", "read-only sandbox"],

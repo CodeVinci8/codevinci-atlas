@@ -63,6 +63,8 @@ async def _start_host(sock, token, jrn, allowed) -> "asyncio.subprocess.Process"
         pass
     env = {**os.environ, "ATLAS_RUNNER_SOCK": sock, "ATLAS_RUNNER_TOKEN": token,
            "ATLAS_RUNNER_JOURNAL": jrn, "ATLAS_RUNNER_ALLOWED": allowed,
+           # тест-хост может идти от root в CI/dev-среде: явно разрешаем.
+           "ATLAS_RUNNER_ALLOW_ROOT": "1",
            "PYTHONPATH": f"{_REPO}/apps/core:{_REPO}/apps/runner"}
     proc = await asyncio.create_subprocess_exec(sys.executable, _HOST, env=env)
     for _ in range(200):
@@ -104,7 +106,7 @@ async def prove_recovery_to_success(base_dir: str, *, items: int = 6, sleep: flo
 
     # --- Фаза 1: Runner #1 в отдельном процессе, запуск worker, жёсткий краш -
     host1 = await _start_host(sock, token, jrn, str(base))
-    lease1 = leases.acquire(project_id=project, worktree=wt, run_id="run-1", role="builder", holder="run-1")
+    leases.acquire(project_id=project, worktree=wt, run_id="run-1", role="builder", holder="run-1")
     store.upsert_run(run_id="run-1", state="RUNNING", project_id=project, vp_id="VP-0")
     track()
 
@@ -155,7 +157,6 @@ async def prove_recovery_to_success(base_dir: str, *, items: int = 6, sleep: flo
     client = RunnerClient(sock, token)
 
     # reconciliation: пока писатель жив — ОТКЛОНЯЕТСЯ; после гибели — освобождает
-    reconcile_refused_while_alive = None
     deadline = time.time() + 3.0
     reconciled = False
     while time.time() < deadline:

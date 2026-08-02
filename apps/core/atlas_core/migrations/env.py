@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
-
 from atlas_core.orm import Base
 from atlas_core.settings import load_settings
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 

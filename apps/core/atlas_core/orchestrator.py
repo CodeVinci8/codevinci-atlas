@@ -21,7 +21,7 @@ from .errors import AtlasError, ErrorCode
 from .handoff import build_checkpoint, build_handoff, verify_handoff
 from .ids import new_id
 from .leases import LeaseStore
-from .profiles import Profile, ProfileRegistry, ProfileState
+from .profiles import Profile, ProfileRegistry
 from .store import Store
 
 # Ошибки, при которых осмысленно сменить профиль (а не повторять тем же).

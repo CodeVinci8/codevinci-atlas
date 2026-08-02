@@ -26,15 +26,17 @@ async def main() -> None:
     # Токен: из окружения (тесты) или сгенерировать и записать в token-файл (прод),
     # чтобы Core (иной пользователь) мог аутентифицироваться, читая файл 0600.
     token = os.environ.get("ATLAS_RUNNER_TOKEN") or generate_token()
+    bridge_group = os.environ.get("ATLAS_BRIDGE_GROUP") or None
     token_file = os.environ.get("ATLAS_RUNNER_TOKEN_FILE")
     if token_file:
-        write_token_file(token_file, token)
+        write_token_file(token_file, token, group=bridge_group)
     cfg = RunnerConfig(
         socket_path=os.environ["ATLAS_RUNNER_SOCK"],
         token=token,
         journal_path=os.environ["ATLAS_RUNNER_JOURNAL"],
         allowed_dirs=[d for d in os.environ.get("ATLAS_RUNNER_ALLOWED", "").split(":") if d],
         allow_root=os.environ.get("ATLAS_RUNNER_ALLOW_ROOT") == "1",
+        bridge_group=bridge_group,
         grace_s=1.0,
     )
     srv = RunnerServer(cfg)

@@ -28,7 +28,11 @@ for pkg in ("apps/core", "apps/runner"):
     sys.path.insert(0, str(_ROOT / pkg))
 
 from atlas_core import config, isolation  # noqa: E402
-from atlas_core.adapters.fake import FakeClaudeAdapter, FakeCodexAdapter, FaultInjection  # noqa: E402
+from atlas_core.adapters.fake import (  # noqa: E402
+    FakeClaudeAdapter,
+    FakeCodexAdapter,
+    FaultInjection,
+)
 from atlas_core.adapters.real_claude import RealClaudeAdapter  # noqa: E402
 from atlas_core.adapters.real_codex import RealCodexAdapter  # noqa: E402
 from atlas_core.contracts import JobPackage, Provider, Role, RunState  # noqa: E402

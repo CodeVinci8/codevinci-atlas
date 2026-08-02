@@ -8,7 +8,6 @@ provider, state, права root, auth-state, capacity=UNKNOWN.
 from __future__ import annotations
 
 import html
-import json
 
 
 def _badge(ok: bool | None, yes: str, no: str, unknown: str = "UNKNOWN") -> str:

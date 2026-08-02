@@ -2,11 +2,10 @@
 
 import time
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core.errors import AtlasError, ErrorCode
 from atlas_core.leases import LeaseStore
 from atlas_core.store import Store
+from atlas_test_base import AtlasTestCase
 
 
 class TestLeases(AtlasTestCase):

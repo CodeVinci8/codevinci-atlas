@@ -38,6 +38,8 @@ class RunnerConfig:
     allow_root: bool = False  # прод: systemd User=atlas; VP-0 среда — root
     # uid'ы идентичностей профилей, в которые Runner имеет право дропнуть привилегии.
     allowed_run_as_uids: set[int] = field(default_factory=set)
+    # bridge-группа для доступа Core к сокету/токену (least-privilege §30.2).
+    bridge_group: str | None = None
     heartbeat_s: float = 0.5
     grace_s: float = 2.0
     max_output_bytes: int = 1_000_000
@@ -72,6 +74,15 @@ class RunnerServer:
             sock.unlink()
         self._server = await asyncio.start_unix_server(self._handle, path=str(sock))
         os.chmod(sock, 0o660)  # §7.3 socket 0660
+        # Least-privilege bridge: сокет доступен группе atlas-bridge (Core),
+        # но не профильным идентичностям.
+        if self.cfg.bridge_group:
+            import grp
+            try:
+                gid = grp.getgrnam(self.cfg.bridge_group).gr_gid
+                os.chown(sock, -1, gid)
+            except (KeyError, PermissionError):
+                pass
 
     async def serve_forever(self) -> None:
         assert self._server is not None

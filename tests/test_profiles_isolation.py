@@ -8,15 +8,19 @@
 import json
 import unittest
 
-from atlas_test_base import AtlasTestCase
-
 from atlas_core import isolation
-from atlas_core.profiles import (ProfileRegistry, ProfileState,
-                                 assert_no_cross_owner, check_root_permissions,
-                                 create_profile_root, isolated_env, runtime_user_for,
-                                 ROOT_ENV_VAR)
+from atlas_core.profiles import (
+    ROOT_ENV_VAR,
+    ProfileRegistry,
+    ProfileState,
+    assert_no_cross_owner,
+    check_root_permissions,
+    create_profile_root,
+    isolated_env,
+    runtime_user_for,
+)
 from atlas_core.redaction import contains_secret
-
+from atlas_test_base import AtlasTestCase
 
 ALIASES = {
     "codex": ["codex-plus-01", "codex-plus-02"],

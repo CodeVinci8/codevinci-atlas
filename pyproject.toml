@@ -43,7 +43,9 @@ extend-exclude = ["apps/web", "var"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
-ignore = ["E501"]
+# E501 длина строки — форматируем отдельно; E741/E702 — стилевые (компактные
+# тесты, однобуквенные счётчики в comprehension), не влияют на корректность.
+ignore = ["E501", "E741", "E702"]
 
 [tool.pytest.ini_options]
 pythonpath = ["apps/core", "apps/runner", "tests"]

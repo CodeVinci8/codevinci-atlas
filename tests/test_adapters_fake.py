@@ -1,13 +1,12 @@
 """Контрактные тесты fake-адаптеров и argv реальных (Master Spec §12, §32.3)."""
 
-from atlas_test_base import AtlasTestCase
-
-from atlas_core.adapters.fake import (FakeClaudeAdapter, FakeCodexAdapter, FaultInjection)
+from atlas_core.adapters.fake import FakeClaudeAdapter, FakeCodexAdapter, FaultInjection
 from atlas_core.adapters.real_claude import RealClaudeAdapter
 from atlas_core.adapters.real_codex import RealCodexAdapter
 from atlas_core.capacity import CapacityStatus
 from atlas_core.contracts import JobPackage, Provider, Role, SessionCapability
 from atlas_core.errors import AtlasError, ErrorCode
+from atlas_test_base import AtlasTestCase
 
 
 def _job(**over):

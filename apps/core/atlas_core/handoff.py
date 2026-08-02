@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .contracts import Checkpoint, HandoffPackage
-from .ids import utcnow_iso
 
 
 @dataclass
