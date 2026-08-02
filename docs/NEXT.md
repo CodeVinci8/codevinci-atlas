@@ -12,16 +12,18 @@
   Смёржен в `main` (PR #4, squash `07ed6f4`). Структурный intake, truth-status,
   версии Brief и решения, Project/Portfolio Map, diff, scope-envelope, parking
   lot, экспорт MD/JSON. Живая БД — на миграции `0003_product_map`.
+- **VP-4 — Work Orders & Context: ЗАВЕРШЁН, 26/26 PASS** ([`vp/VP-4.md`](vp/VP-4.md)).
+  Смёржен в `main` (PR #6, squash `7a3f82d`, CI head `280ee35`). VP Spec из
+  принятого Brief/Map, Work Orders (один writer, concurrency, идемпотентность),
+  оптимизатор с сохранением критериев, bounded JobPackage, checkpoint/handoff,
+  свежая изолированная реконструкция внутри Core-образа, ротация одного writer,
+  compact fail-closed, Work Orders UI RU/EN. Живая БД — на `0004_work_orders`.
 
 ## Активный VP
 
-**VP-4 — Work Orders & Context (Master Spec §16, §37): РЕАЛИЗОВАН, 26/26 PASS**
-([`vp/VP-4.md`](vp/VP-4.md)). Приёмка `scripts/run_vp4_acceptance.py` — 26/26
-против развёрнутого стека; живая БД мигрирована на `0004_work_orders` (backup
-снят до миграции). PR `atlas/vp-4-work-orders-context` открыт, ожидается CI на
-точном head-SHA и squash-merge. Точные PR #, CI head и merge-SHA фиксируются
-post-merge sync-коммитом. Следующий гейт после merge — **VP-5 (Run Engine &
-Role Routing)**, **не начат** (отдельное решение владельца).
+**Нет активного VP.** VP-0…VP-4 завершены и смёржены. Следующий гейт — **VP-5
+(Agent Pipeline, Master Spec §38)**, но он **не начат** и стартует только по
+отдельному решению владельца.
 
 ## NEXT_ACTION
 

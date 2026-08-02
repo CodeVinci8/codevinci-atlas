@@ -29,20 +29,17 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
   to Markdown/JSON. Every fact carries an explicit truth status; `VERIFIED`
   requires resolvable evidence.
 
-Currently in review:
-
-- **VP-4 — Work Orders & Context: IMPLEMENTED (26/26 PASS)**
+- **VP-4 — Work Orders & Context: COMPLETE (26/26 PASS)**
   ([`docs/vp/VP-4.md`](docs/vp/VP-4.md), [`docs/en/WORK_ORDERS.md`](docs/en/WORK_ORDERS.md)) —
   deterministic VP Spec from an accepted Brief/Map, executable Work Orders with
   versioned lifecycle and one-writer leases, controlled optimizer decisions
   (READY/MERGE/SPLIT/OWNER_REQUIRED/SWITCH_PROFILE), bounded immutable JobPackage,
   Context Governor with durable checkpoints and handoff, and a **fresh isolated
-  consumer** that reconstructs state from the HandoffPackage alone. Live DB
-  migrated to `0004_work_orders`; the exact PR / CI head / merge SHA are recorded
-  by a post-merge sync commit.
+  consumer** that reconstructs state from the HandoffPackage alone. Merged via
+  PR #6 (squash `7a3f82d`, CI head `280ee35`); live DB on `0004_work_orders`.
 
-After VP-4 merges, the next stage — **VP-5: Run Engine & Role Routing** — is
-**not started**; it begins only by separate owner decision.
+No VP is currently active. Next stage — **VP-5: Agent Pipeline** (Master Spec
+§38) — is **not started**; it begins only by separate owner decision.
 
 ## Quick start
 

@@ -10,12 +10,14 @@
   решения accept/reject, nodes/edges, approval + envelope, parking lot,
   Project/Portfolio Map, diff, экспорт MD/JSON; merged PR #4 squash `07ed6f4`;
   живая БД на `0003_product_map`).
-- **VP-4 — Work Orders & Context: РЕАЛИЗОВАН — 26/26** (VP Spec из принятого
+- **VP-4 — Work Orders & Context: ЗАВЕРШЁН — 26/26** (VP Spec из принятого
   Brief/Map, Work Orders + переходы, оптимизатор READY/MERGE/SPLIT/OWNER_REQUIRED/
   SWITCH_PROFILE, bounded JobPackage, checkpoint/handoff, свежая изолированная
   реконструкция внутри Core-образа, ротация с одним writer, compact-fallback,
-  Work Orders UI RU/EN). Живая БД на `0004_work_orders`; PR на ревью, точные
-  PR #/CI head/merge-SHA — post-merge sync. Следующий гейт — VP-5, **не начат**.
+  Work Orders UI RU/EN; merged PR #6 squash `7a3f82d`, CI head `280ee35`; живая
+  БД на `0004_work_orders`).
+- **Активного VP нет.** Следующий гейт — VP-5 (Agent Pipeline, §38), **не
+  начат** (отдельное решение владельца).
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
   Runner READY.
 - **Профили:** 4 реальных, авторизованы; per-profile идентичности
@@ -28,7 +30,7 @@
   root `0700` во владении своей идентичности; Runner дропает привилегии.
   Сервисный `atlas` не читает credentials.
 - **Репозиторий:** `CodeVinci8/codevinci-atlas`, public. VP-0 (PR #1), VP-1
-  (PR #2), VP-2 (PR #3) и VP-3 (PR #4) **смёржены** в `main`.
+  (PR #2), VP-2 (PR #3), VP-3 (PR #4) и VP-4 (PR #6) **смёржены** в `main`.
 - **Git-идентичность:** имя `CodeVinci`, email в `git config` (задан).
 - **Главные правила:** один writer, credentials не копируются, секреты не в
   durable-состоянии, capacity честно UNKNOWN.

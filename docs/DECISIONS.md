@@ -275,15 +275,15 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   реконструкция), тёмная тема по умолчанию сохранена, RU/EN-паритет, a11y,
   responsive. Полная оркестрация/run-стрим — VP-5/VP-8, в VP-4 UI не тянется.
 
-## VP-4 — ГОТОВ (26/26), НА РЕВЬЮ
+## VP-4 — ЗАВЕРШЁН (26/26), СМЁРЖЕН
 
 Приёмка `scripts/run_vp4_acceptance.py`: **26/26 PASS** против реально
 развёрнутого стека (Compose Core/Web + systemd Runner) и синтетических фикстур
 (удаляются по точным ID; append-only Audit сохраняется). Evidence с SHA-256 —
 `var/artifacts/vp4/`. Живая БД мигрирована на `0004_work_orders`; backup снят до
-миграции. Reconstruction исполняется внутри Core-образа. PR открыт, ожидается CI
-на точном head-SHA и squash-merge; точные PR #, CI head и merge-SHA фиксируются
-post-merge sync-коммитом в `main`.
+миграции. Reconstruction исполняется внутри Core-образа. Смёржен в `main` через
+**PR #6** (squash), CI зелёный на точном head-SHA `280ee35`, merge-commit
+`7a3f82d` `CodeVinci8/codevinci-atlas`.
 
 ## Требуют отдельного подтверждения владельца
 

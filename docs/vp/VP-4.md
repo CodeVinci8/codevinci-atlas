@@ -1,9 +1,9 @@
 # VP-4 — Work Orders & Context (исполнимый спек)
 
-**Статус:** ГОТОВ К MERGE — 26/26 PASS против реально развёрнутого стека.
+**Статус:** ЗАВЕРШЁН — 26/26 PASS, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §16, §37 и связанные §13.4, §15, §21, §25, §30.
-**Ветка:** `atlas/vp-4-work-orders-context` · **PR/merge:** фиксируются post-merge
-sync-коммитом (см. [`docs/NEXT.md`](../NEXT.md)/[`docs/DECISIONS.md`](../DECISIONS.md)).
+**Ветка:** `atlas/vp-4-work-orders-context` · **PR:** #6 (squash) · **CI head:**
+`280ee35` · **merge:** `7a3f82d`.
 
 ## Result и Definition of Done
 
