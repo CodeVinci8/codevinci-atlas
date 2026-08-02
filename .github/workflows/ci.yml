@@ -25,14 +25,14 @@ jobs:
         run: uv sync --frozen
       - name: ruff (lint)
         run: uv run ruff check apps tests scripts
-      - name: Миграции из пустой БД (0001 → … → 0004 head)
+      - name: Миграции из пустой БД (0001 → … → 0005 head)
         env:
           ATLAS_DATA_DIR: ${{ runner.temp }}/atlas-empty
           ATLAS_CONFIG_FILE: /nonexistent.yaml
         run: |
           mkdir -p "$ATLAS_DATA_DIR"
           uv run alembic upgrade head
-          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); need={'audit_events','projects','briefs','map_versions','map_nodes','map_edges','decisions','approvals','vp_activations','vp_specs','work_orders','work_order_events','optimizer_decisions','job_packages','wo_checkpoints','handoff_packages','handoff_acks','rotation_records','alembic_version'}; assert need<=t, sorted(need-t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0004_work_orders', r; print('migration head ok (0004):', sorted(t))"
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); need={'audit_events','projects','briefs','map_versions','map_nodes','map_edges','decisions','approvals','vp_activations','vp_specs','work_orders','work_order_events','optimizer_decisions','job_packages','wo_checkpoints','handoff_packages','handoff_acks','rotation_records','model_registry','runs','run_role_steps','run_events','provider_sessions','router_decisions','run_leases','agent_profiles','profile_states','capacity_observations','alembic_version'}; assert need<=t, sorted(need-t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0005_agent_pipeline', r; print('migration head ok (0005):', sorted(t))"
       - name: Апгрейд с предыдущей схемы (0002 → head) без потери таблиц VP-2
         env:
           ATLAS_DATA_DIR: ${{ runner.temp }}/atlas-prev
@@ -42,7 +42,7 @@ jobs:
           uv run alembic upgrade 0002_project_workspace
           uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0002_project_workspace', r"
           uv run alembic upgrade head
-          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); assert {'projects','git_baselines','worktrees','briefs','approvals'}<=t, sorted(t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0004_work_orders', r; print('upgrade 0002->head ok')"
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); assert {'projects','git_baselines','worktrees','briefs','approvals'}<=t, sorted(t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0005_agent_pipeline', r; print('upgrade 0002->head ok')"
       - name: Апгрейд 0003 → head добавляет таблицы VP-4 без потери VP-0..3
         env:
           ATLAS_DATA_DIR: ${{ runner.temp }}/atlas-0003
@@ -52,7 +52,17 @@ jobs:
           uv run alembic upgrade 0003_product_map
           uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); before=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); assert 'work_orders' not in before, before; r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0003_product_map', r"
           uv run alembic upgrade head
-          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); vp4={'vp_specs','work_orders','work_order_events','optimizer_decisions','job_packages','wo_checkpoints','handoff_packages','handoff_acks','rotation_records'}; vp03={'projects','briefs','map_versions','decisions','approvals','worktrees','git_baselines'}; assert vp4<=t, sorted(vp4-t); assert vp03<=t, sorted(vp03-t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0004_work_orders', r; print('upgrade 0003->head ok (VP-4 tables added)')"
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); vp4={'vp_specs','work_orders','work_order_events','optimizer_decisions','job_packages','wo_checkpoints','handoff_packages','handoff_acks','rotation_records'}; vp03={'projects','briefs','map_versions','decisions','approvals','worktrees','git_baselines'}; assert vp4<=t, sorted(vp4-t); assert vp03<=t, sorted(vp03-t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0005_agent_pipeline', r; print('upgrade 0003->head ok (VP-4+VP-5 tables added)')"
+      - name: Апгрейд 0004 → head добавляет таблицы VP-5 без потери VP-0..4
+        env:
+          ATLAS_DATA_DIR: ${{ runner.temp }}/atlas-0004
+          ATLAS_CONFIG_FILE: /nonexistent.yaml
+        run: |
+          mkdir -p "$ATLAS_DATA_DIR"
+          uv run alembic upgrade 0004_work_orders
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); before=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); assert 'runs' not in before, before; r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0004_work_orders', r"
+          uv run alembic upgrade head
+          uv run python -c "import sqlite3,os; c=sqlite3.connect(os.path.join(os.environ['ATLAS_DATA_DIR'],'atlas.db')); t=set(r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")); vp5={'model_registry','runs','run_role_steps','run_events','provider_sessions','router_decisions','run_leases','agent_profiles','profile_states','capacity_observations','run_retries','run_pauses','handoff_links','discovery_snapshots','role_presets','profile_health'}; vp04={'vp_specs','work_orders','handoff_packages','rotation_records','projects','briefs'}; assert vp5<=t, sorted(vp5-t); assert vp04<=t, sorted(vp04-t); r=c.execute('select version_num from alembic_version').fetchone(); assert r[0]=='0005_agent_pipeline', r; print('upgrade 0004->head ok (VP-5 16 tables added)')"
       - name: Валидация контрактных JSON-схем VP-4 (подмножество валидатора)
         run: PYTHONPATH=apps/core:apps/runner uv run python scripts/validate_schemas.py
       - name: Юнит/интеграционные тесты (Core+Runner+UDS+ProductMap+WorkOrders)
