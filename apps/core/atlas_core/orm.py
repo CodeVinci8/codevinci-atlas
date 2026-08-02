@@ -579,3 +579,384 @@ class RotationRecord(Base):
     actor: Mapped[str] = mapped_column(String(80), default="core")
     correlation_id: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+# --- VP-5 Agent Pipeline (Master Spec §38, §17) ----------------------------
+# Durable-состояние конвейера Codex Planner → Claude Builder → Codex Reviewer.
+# Секреты/email/cookie/raw path/transcript/full payload НИКОГДА не хранятся.
+# Таблицы создаёт только Alembic (0005_agent_pipeline).
+
+def _iso_opt(dt: datetime | None) -> str | None:
+    return _iso(dt) if dt is not None else None
+
+
+class ModelRegistry(Base):
+    """Реестр моделей/провайдеров: source, availability, observation time (§17.2)."""
+
+    __tablename__ = "model_registry"
+    __table_args__ = (UniqueConstraint("provider", "model_id", name="uq_model_provider_id"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20), index=True)  # codex|claude
+    model_id: Mapped[str] = mapped_column(String(120))
+    alias: Mapped[str] = mapped_column(String(80), default="")
+    display: Mapped[str] = mapped_column(String(200), default="")
+    efforts_json: Mapped[str] = mapped_column(Text, default="[]")
+    context_capability: Mapped[str] = mapped_column(String(40), default="")
+    structured_capability: Mapped[bool] = mapped_column(Boolean, default=False)
+    availability: Mapped[str] = mapped_column(String(20), default="unknown", index=True)
+    source: Mapped[str] = mapped_column(String(30), default="unknown")
+    confidence: Mapped[str] = mapped_column(String(20), default="unknown")
+    discovered_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "provider": self.provider, "model_id": self.model_id,
+            "alias": self.alias, "display": self.display,
+            "efforts": _json.loads(self.efforts_json or "[]"),
+            "context_capability": self.context_capability,
+            "structured_capability": self.structured_capability,
+            "availability": self.availability, "source": self.source,
+            "confidence": self.confidence, "discovered_at": _iso(self.discovered_at),
+        }
+
+
+class DiscoverySnapshot(Base):
+    """Снимок discover_capabilities per profile+time (§12)."""
+
+    __tablename__ = "discovery_snapshots"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20), index=True)
+    profile_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    models_json: Mapped[str] = mapped_column(Text, default="[]")
+    source: Mapped[str] = mapped_column(String(30), default="unknown")
+    observed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class RolePreset(Base):
+    """Пресет роли → предпочтения модели/эффорта (§17.2)."""
+
+    __tablename__ = "role_presets"
+    __table_args__ = (UniqueConstraint("preset_key", "role", name="uq_preset_role"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    preset_key: Mapped[str] = mapped_column(String(80), index=True)
+    role: Mapped[str] = mapped_column(String(20))  # planner|builder|reviewer
+    provider: Mapped[str] = mapped_column(String(20), default="")
+    model_pref_json: Mapped[str] = mapped_column(Text, default="[]")
+    effort_pref: Mapped[str] = mapped_column(String(20), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class AgentProfile(Base):
+    """Safe-метаданные профиля (§11.1/11.2): alias, provider, unix-метка,
+    allowlist-ref auth root. БЕЗ email/token/cookie/raw path."""
+
+    __tablename__ = "agent_profiles"
+    __table_args__ = (UniqueConstraint("alias", name="uq_agent_profile_alias"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    alias: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(20), index=True)  # codex|claude
+    unix_label: Mapped[str] = mapped_column(String(40), default="")  # safe service label
+    auth_root_ref: Mapped[str] = mapped_column(String(120), default="")  # allowlist ref, NOT raw path
+    schedulable: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "alias": self.alias, "provider": self.provider,
+            "unix_label": self.unix_label, "schedulable": self.schedulable,
+            "enabled": self.enabled, "created_at": _iso(self.created_at),
+        }
+
+
+class ProfileState(Base):
+    """Availability профиля: состояние/cooldown/drain + optimistic version (§11.3)."""
+
+    __tablename__ = "profile_states"
+    __table_args__ = (UniqueConstraint("profile_id", name="uq_profile_state_profile"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(String(40))
+    state: Mapped[str] = mapped_column(String(20), default="AUTH_REQUIRED", index=True)
+    cooldown_until: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    drain: Mapped[bool] = mapped_column(Boolean, default=False)
+    current_run_id: Mapped[str] = mapped_column(String(40), default="")
+    current_role: Mapped[str] = mapped_column(String(20), default="")
+    next_action: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    def to_dict(self) -> dict:
+        return {
+            "profile_id": self.profile_id, "state": self.state,
+            "cooldown_until": _iso_opt(self.cooldown_until), "drain": self.drain,
+            "current_run_id": self.current_run_id, "current_role": self.current_role,
+            "next_action": self.next_action, "updated_at": _iso(self.updated_at),
+            "version": self.version,
+        }
+
+
+class ProfileHealth(Base):
+    """Health-наблюдение (§11.5): executable/version/auth/permissions, redacted error."""
+
+    __tablename__ = "profile_health"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(String(40), index=True)
+    executable: Mapped[str] = mapped_column(String(255), default="")
+    cli_version: Mapped[str] = mapped_column(String(80), default="")
+    auth_status: Mapped[str] = mapped_column(String(30), default="UNKNOWN")
+    plan_label: Mapped[str] = mapped_column(String(40), default="")  # verified only
+    permissions_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_error: Mapped[str] = mapped_column(String(80), default="")  # redacted short code
+    observed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "profile_id": self.profile_id, "executable": self.executable,
+            "cli_version": self.cli_version, "auth_status": self.auth_status,
+            "plan_label": self.plan_label, "permissions_ok": self.permissions_ok,
+            "last_error": self.last_error, "observed_at": _iso(self.observed_at),
+        }
+
+
+class CapacityObservation(Base):
+    """Наблюдение ёмкости (§11.6): status/окна/reset/source/confidence; UNKNOWN не фикция."""
+
+    __tablename__ = "capacity_observations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="UNKNOWN")  # AVAILABLE|LOW|EXHAUSTED|UNKNOWN
+    five_h_used_pct: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True)
+    seven_d_used_pct: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True)
+    reset_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default="unknown")
+    confidence: Mapped[str] = mapped_column(String(20), default="unknown")
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    observed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "profile_id": self.profile_id, "status": self.status,
+            "five_h_used_pct": self.five_h_used_pct,
+            "seven_d_used_pct": self.seven_d_used_pct,
+            "reset_at": _iso_opt(self.reset_at), "source": self.source,
+            "confidence": self.confidence, "stale": self.stale,
+            "observed_at": _iso(self.observed_at),
+        }
+
+
+class Run(Base):
+    """Run конвейера (§17.4). Optimistic version; dedup_key для идемпотентности."""
+
+    __tablename__ = "runs"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), default="")
+    vp_key: Mapped[str] = mapped_column(String(80), default="")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    state: Mapped[str] = mapped_column(String(20), default="QUEUED", index=True)
+    preset: Mapped[str] = mapped_column(String(80), default="")
+    owner_override_json: Mapped[str] = mapped_column(Text, default="{}")
+    dedup_key: Mapped[str] = mapped_column(String(120), default="")
+    next_action: Mapped[str] = mapped_column(String(255), default="")
+    blocker: Mapped[str] = mapped_column(String(255), default="")
+    failure_class: Mapped[str] = mapped_column(String(30), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "project_id": self.project_id,
+            "work_order_id": self.work_order_id, "vp_key": self.vp_key,
+            "correlation_id": self.correlation_id, "state": self.state,
+            "preset": self.preset,
+            "owner_override": _json.loads(self.owner_override_json or "{}"),
+            "next_action": self.next_action, "blocker": self.blocker,
+            "failure_class": self.failure_class, "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at), "version": self.version,
+        }
+
+
+class RunRoleStep(Base):
+    """Шаг роли Run: requested/effective модель+профиль, reason, verdict (§17.1/17.3)."""
+
+    __tablename__ = "run_role_steps"
+    __table_args__ = (UniqueConstraint("run_id", "role", "seq", name="uq_role_step_run_role_seq"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="")
+    role: Mapped[str] = mapped_column(String(20), index=True)  # planner|builder|reviewer
+    seq: Mapped[int] = mapped_column(Integer)
+    requested_model: Mapped[str] = mapped_column(String(120), default="")
+    effective_model: Mapped[str] = mapped_column(String(120), default="")
+    requested_profile: Mapped[str] = mapped_column(String(80), default="")
+    effective_profile: Mapped[str] = mapped_column(String(80), default="")
+    provider: Mapped[str] = mapped_column(String(20), default="")
+    session_ref: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    verdict: Mapped[str] = mapped_column(String(20), default="")
+    reason_code: Mapped[str] = mapped_column(String(60), default="")
+    builder_session_ref: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "run_id": self.run_id, "role": self.role, "seq": self.seq,
+            "requested_model": self.requested_model, "effective_model": self.effective_model,
+            "requested_profile": self.requested_profile,
+            "effective_profile": self.effective_profile, "provider": self.provider,
+            "session_ref": self.session_ref, "status": self.status,
+            "verdict": self.verdict, "reason_code": self.reason_code,
+            "updated_at": _iso(self.updated_at), "version": self.version,
+        }
+
+
+class RunEvent(Base):
+    """Нормализованное событие Run (§25). Переживает рестарт Core."""
+
+    __tablename__ = "run_events"
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_run_event_seq"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="")
+    seq: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "run_id": self.run_id, "seq": self.seq,
+            "type": self.event_type, "occurred_at": _iso(self.occurred_at),
+            "payload": _json.loads(self.payload_json or "{}"),
+            "schema_version": self.schema_version,
+        }
+
+
+class ProviderSession(Base):
+    """Ссылка на provider-сессию (§12.3): session_id-handle. БЕЗ transcript/credentials."""
+
+    __tablename__ = "provider_sessions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    role: Mapped[str] = mapped_column(String(20), default="")
+    provider: Mapped[str] = mapped_column(String(20), index=True)
+    profile_id: Mapped[str] = mapped_column(String(40), default="")
+    session_id: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    started_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "run_id": self.run_id, "role": self.role,
+            "provider": self.provider, "profile_id": self.profile_id,
+            "session_id": self.session_id, "status": self.status,
+            "started_at": _iso(self.started_at), "last_seen_at": _iso_opt(self.last_seen_at),
+        }
+
+
+class RouterDecision(Base):
+    """Решение роутера (§17.3): requested vs effective + reason_code + кандидаты."""
+
+    __tablename__ = "router_decisions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    role: Mapped[str] = mapped_column(String(20), index=True)
+    requested_model: Mapped[str] = mapped_column(String(120), default="")
+    requested_profile: Mapped[str] = mapped_column(String(80), default="")
+    effective_model: Mapped[str] = mapped_column(String(120), default="")
+    effective_profile: Mapped[str] = mapped_column(String(80), default="")
+    reason_code: Mapped[str] = mapped_column(String(60), default="")
+    candidates_json: Mapped[str] = mapped_column(Text, default="[]")
+    decided_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "run_id": self.run_id, "role": self.role,
+            "requested_model": self.requested_model,
+            "requested_profile": self.requested_profile,
+            "effective_model": self.effective_model,
+            "effective_profile": self.effective_profile,
+            "reason_code": self.reason_code,
+            "candidates": _json.loads(self.candidates_json or "[]"),
+            "decided_at": _iso(self.decided_at),
+        }
+
+
+class RunLease(Base):
+    """Аренда профиля Run (§13.4). Активная: released_at=''. UNIQUE(profile_id,
+    released_at) → не более одной активной аренды на профиль (нет второго writer)."""
+
+    __tablename__ = "run_leases"
+    __table_args__ = (UniqueConstraint("profile_id", "released_at", name="uq_run_lease_profile_active"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    role: Mapped[str] = mapped_column(String(20), default="")
+    profile_id: Mapped[str] = mapped_column(String(40), index=True)
+    worktree: Mapped[str] = mapped_column(String(255), default="")
+    holder: Mapped[str] = mapped_column(String(80), default="")
+    acquired_at: Mapped[str] = mapped_column(String(30))
+    expires_at: Mapped[str] = mapped_column(String(30), default="")
+    heartbeat_at: Mapped[str] = mapped_column(String(30), default="")
+    released_at: Mapped[str] = mapped_column(String(30), default="")
+
+
+class RunRetry(Base):
+    """Bounded-ретрай с классом ошибки (§12.4, §17.5)."""
+
+    __tablename__ = "run_retries"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    role: Mapped[str] = mapped_column(String(20), default="")
+    attempt: Mapped[int] = mapped_column(Integer)
+    error_class: Mapped[str] = mapped_column(String(30), default="UNKNOWN")
+    backoff_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class RunPause(Base):
+    """Pause/interruption/recovery запись (§31)."""
+
+    __tablename__ = "run_pauses"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)  # pause|resume|interruption|recovery
+    reason: Mapped[str] = mapped_column(String(120), default="")
+    safe_continuation_ref: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class HandoffLink(Base):
+    """Связь Run ↔ HandoffPackage (VP-4) / recovery (§16.4)."""
+
+    __tablename__ = "handoff_links"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    handoff_package_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="")  # checkpoint|handoff|recovery
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
