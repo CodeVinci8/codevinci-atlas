@@ -79,6 +79,8 @@ QUEUED → PREPARING → RUNNING → COLLECTING → SUCCEEDED
 
 ## Durable schemas (миграция `0005_agent_pipeline`)
 
+Миграция `0005_agent_pipeline` создаёт ровно **16 durable-таблиц** (перечислены
+ниже; `idempotency_keys` переиспользуется из VP-3, не пересоздаётся).
 Минимально необходимое durable-состояние (append-only Audit — §30.2):
 
 - `model_registry` — provider, model_id, alias, display, efforts, context/
