@@ -17,29 +17,33 @@
   принятого Brief/Map, Work Orders (один writer, concurrency, идемпотентность),
   оптимизатор с сохранением критериев, bounded JobPackage, checkpoint/handoff,
   свежая изолированная реконструкция внутри Core-образа, ротация одного writer,
-  compact fail-closed, Work Orders UI RU/EN. Живая БД — на `0004_work_orders`.
+  compact fail-closed, Work Orders UI RU/EN.
+- **VP-5 — Agent Pipeline: ЗАВЕРШЁН, 26/26 PASS + реальный provider-E2E**
+  ([`vp/VP-5.md`](vp/VP-5.md)). Смёржен в `main` (**PR #9**, squash `afefa61`,
+  CI head `86c504e`). Конвейер Codex Planner → Claude Builder → независимый Codex
+  Reviewer: durable Runs (lifecycle/идемпотентность/optimistic), router без
+  silent fallback, один writer (worktree+profile lease), три раздельные
+  session-семантики, bounded rate-limit/auth/interruption-recovery, Profiles MVP,
+  full-width Pulse, RU/EN. Детерминированная приёмка `run_vp5_acceptance.py` —
+  **26/26**; реальный E2E `run_vp5_real_e2e.py` — реальный артефакт `calc.py`
+  (3/6 подписочных вызовов, PASS). Живая БД — на **`0005_agent_pipeline`**.
 
 ## Активный VP
 
-**VP-5 — Agent Pipeline (Master Spec §38, §17): АКТИВЕН, локально реализован.**
-Ветка `atlas/vp-5-agent-pipeline` (не запушена). Детерминированная приёмка
-`scripts/run_vp5_acceptance.py` — **26/26 PASS** против реальной миграции
-`0005_agent_pipeline`, реального ORM/БД и ASGI-стека (TestClient), с
-fake-адаптерами (§32.2). Полная Python-регрессия — 243 OK. Evidence + SHA-256 —
-`var/artifacts/vp5/`.
-
-**Реальный provider-E2E** (Planner→Builder→Reviewer на подписке) — **честно
-pending** до отдельной owner-авторизации. Пуша/PR/merge VP-5 **ещё нет**.
+**Нет активного VP.** VP-0…VP-5 завершены и смёржены. Следующий гейт — **VP-6
+(Review & Quality, Master Spec §39)**, но он **не начат** и стартует только по
+отдельному решению владельца.
 
 ## NEXT_ACTION
 
-Owner подтверждает external-action checkpoint VP-5: (1) первый push ветки
-`atlas/vp-5-agent-pipeline`; (2) русский PR; (3) после зелёного CI на точном
-head-SHA — squash-merge; и отдельно (4) авторизует ограниченный реальный
-provider-E2E (точные профили/модели/команды/лимит вызовов — в чекпойнте).
+Owner проводит финальный обзор **VP-5 Runs/Profiles/Pulse** на
+`http://127.0.0.1:3210` (SSH-туннель): вкладка «Запуски» — lifecycle-таймлайн,
+requested/effective модель+профиль, router reason, роли, provider-сессии,
+аренда, вердикт Reviewer, next action; «Профили» — карточки/таблица, честная
+ёмкость UNKNOWN/STALE; «Пульс» — full-width система; RU/EN-переключатель.
 
 ## Границы
 
-Один активный VP-гейт (WIP=1) — VP-5. **VP-6…VP-9 не начинать.** Полный
-операционный console Profiles/Pulse (40 профилей) — VP-8. Cookie-import —
-`UNSUPPORTED`. LICENSE — отдельное решение владельца.
+Активного VP-гейта нет (WIP=0). **VP-6…VP-9 не начинать** — отдельное решение
+владельца. Полный операционный console Profiles/Pulse (40 профилей) — VP-8.
+Cookie-import — `UNSUPPORTED`. LICENSE — отдельное решение владельца.

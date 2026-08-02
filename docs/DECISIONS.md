@@ -285,7 +285,7 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 **PR #6** (squash), CI зелёный на точном head-SHA `280ee35`, merge-commit
 `7a3f82d` `CodeVinci8/codevinci-atlas`.
 
-## VP-5 — Agent Pipeline (АКТИВЕН, локально реализован; не смёржен)
+## VP-5 — Agent Pipeline (ЗАВЕРШЁН, 26/26 + реальный E2E, СМЁРЖЕН: PR #9, squash `afefa61`, CI head `86c504e`; живая БД `0005_agent_pipeline`)
 
 - **VP5-D1 (session-семантики).** Три РАЗДЕЛЬНЫЕ семантики (§12.3), не смешиваем:
   `EXACT_RESUME` (`--resume <id>`, тот же профиль), `FORK_SESSION`
@@ -332,10 +332,10 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 
 ## Требуют отдельного подтверждения владельца
 
-- Создание/использование GitHub-репозитория за пределами read-only (репозиторий
-  `CodeVinci8/codevinci-atlas` уже существует и пуст — первый push это гейт).
 - Выбор LICENSE (кандидаты MIT/Apache-2.0; выбирается после reuse-аудита, §20.4).
-- Первый commit/push/merge VP-5 (ветка `atlas/vp-5-agent-pipeline`).
-- **Реальный provider-E2E VP-5** (Codex/Claude подписочные вызовы).
+- Старт VP-6 (Review & Quality, §39) — отдельное решение владельца.
 - Official login профилей (Codex CLI 0.146.0 уже установлен владельцем).
 - File Atelier increment, публичный release/tag, домен/TLS, активация cookie-импорта.
+
+(VP-5 push/PR #9/squash-merge `afefa61` и реальный provider-E2E — **выполнены**
+по one-time owner-авторизации; см. VP5-D7.)
