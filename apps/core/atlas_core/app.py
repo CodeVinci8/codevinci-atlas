@@ -31,9 +31,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.web_origin],
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
+
+    from .api_projects import router as projects_router
+    app.include_router(projects_router)
 
     @app.get("/api/v1/health")
     def health() -> JSONResponse:
