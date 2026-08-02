@@ -87,9 +87,10 @@ export function ProfilesView({ t }: { t: T }) {
 
       {rows === null && !error && <p className="muted">{t("common.loading")}</p>}
       {rows && rows.length === 0 && (
-        <div className="empty-state">
+        <div className="empty-state compact">
           <p>{t("profiles.empty")}</p>
           <p className="muted">{t("profiles.emptyHint")}</p>
+          <a className="btn-primary" href="#onb-h">{t("profiles.onboarding")}</a>
         </div>
       )}
 

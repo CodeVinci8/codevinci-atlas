@@ -56,7 +56,7 @@ export function RunsView({ t }: { t: T }) {
       {error && <p className="error" role="alert">{error}</p>}
       {rows === null && !error && <p className="muted">{t("common.loading")}</p>}
       {rows && rows.length === 0 && (
-        <div className="empty-state">
+        <div className="empty-state compact">
           <p>{t("runs.empty")}</p>
           <p className="muted">{t("runs.emptyHint")}</p>
         </div>

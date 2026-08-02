@@ -281,6 +281,25 @@ export const api = {
     getJSON<{ profiles: ProfileView[]; summary: Record<string, number> }>("/api/v1/profiles"),
   listModels: () => getJSON<{ models: ModelRow[] }>("/api/v1/models"),
   systemSummary: () => getJSON<{ summary: SystemSummary }>("/api/v1/system/summary"),
+
+  // --- VP-6 Review & Quality ---
+  listReviews: (q: { verdict?: string; severity?: string; project?: string;
+                     vp?: string; freshness?: string } = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v) p.set(k, v);
+    const qs = p.toString();
+    return getJSON<{ reviews: ReviewSummary[]; summary: Record<string, number> }>(
+      `/api/v1/reviews${qs ? `?${qs}` : ""}`);
+  },
+  getReview: (id: string) => getJSON<ReviewDetail>(`/api/v1/reviews/${id}`),
+  manualAudit: (id: string, body: { target: string; scope?: string; note?: string }) =>
+    sendJSON<{ manual_audit: ManualAuditRow }>(`/api/v1/reviews/${id}/audit`, "POST", body),
+  createWaiver: (id: string, body: {
+    finding_id: string; reason: string; scope: string; expiry: string; review_condition: string;
+  }) => sendJSON<{ waiver: WaiverRow }>(`/api/v1/reviews/${id}/waiver`, "POST", body),
+  createFixWorkOrder: (id: string, body: { finding_id?: string; goal?: string }) =>
+    sendJSON<{ fix_work_order: { id: string; goal: string; status: string; role: string } }>(
+      `/api/v1/reviews/${id}/fix-work-order`, "POST", body),
 };
 
 // --- VP-5 types ------------------------------------------------------------
@@ -421,4 +440,56 @@ export interface MergePreview {
   compatible: boolean; reason: string; work_order_ids: string[];
   criterion_mapping: Record<string, string[]>; merged_criteria: Criterion[];
   shared_criteria: string[]; criterion_conservation: boolean;
+}
+
+// --- VP-6 Review & Quality types -------------------------------------------
+export type Verdict = "PASS" | "REVISE" | "BLOCKED" | "OWNER_REQUIRED" | "INVALID_EVIDENCE" | "";
+export type Severity = "blocker" | "major" | "minor" | "info";
+
+export interface ReviewSummary {
+  id: string; project_id: string; run_id: string; vp_key: string; wo_key: string;
+  branch: string; head_sha: string; content_hash: string; status: string;
+  impact_class: string; verdict: Verdict; blocking_count: number; findings_count: number;
+  severities: string[]; freshness: string; reviewer_alias: string; created_at: string;
+}
+export interface FindingRow {
+  id: string; review_package_id: string; gate: string; code: string; severity: Severity;
+  criterion: string; location: string; evidence: string; action: string;
+  blocking: boolean; source: string; freshness: string; waived: boolean; created_at: string;
+}
+export interface ReviewPackageView {
+  id: string; project_id: string; run_id: string; vp_key: string; wo_key: string;
+  branch: string; base_sha: string; head_sha: string; spec_hash: string;
+  impact_class: string; content_hash: string; status: string;
+  invalid_code: string; invalid_reason: string;
+  claims: { claim?: string }[]; acceptance: { criterion?: string; passed?: boolean }[];
+  checks: { command?: string; version?: string; cache?: string; result?: unknown }[];
+  limitations: string[]; freshness: Record<string, string>; created_at: string;
+}
+export interface QualityReportView {
+  id: string; verdict: Verdict; evidence_summary: string; gate_fired: string;
+  sufficiency_reason: string; next_action: string; stop_reason: string;
+  blocking_count: number; findings_count: number; content_hash: string; created_at: string;
+}
+export interface ImpactView {
+  impact_class: string; reason: string; check_groups: string[];
+  risk_trigger: string; full_regression: boolean;
+}
+export interface ManualAuditRow {
+  id: string; target: string; scope: string; read_only: boolean;
+  findings_count: number; created_at: string;
+}
+export interface WaiverRow {
+  id: string; finding_id: string; reason: string; scope: string; actor: string;
+  expiry: string; review_condition: string; waivable: boolean; rejected_code: string; created_at: string;
+}
+export interface ReviewDetail {
+  package: ReviewPackageView;
+  report: QualityReportView | null;
+  findings: FindingRow[];
+  impact: ImpactView | null;
+  manual_audits: ManualAuditRow[];
+  waivers: WaiverRow[];
+  cache_reuse: { command?: string; cache?: string }[];
+  reviewer_alias: string;
 }

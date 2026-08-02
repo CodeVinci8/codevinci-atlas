@@ -8,9 +8,11 @@ import { PortfolioView, ProductMapView } from "./productmap";
 import { WorkOrdersView } from "./workorders";
 import { RunsView } from "./runs";
 import { ProfilesView } from "./profiles";
+import { QualityView } from "./quality";
+import { fmtBytes, fmtDuration, fmtLocal, fmtRelative } from "./fmt";
 import type { SystemSummary } from "./api";
 
-type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles";
+type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles" | "quality";
 
 type T = (key: LocaleKey) => string;
 function useT(locale: Locale): T {
@@ -106,13 +108,15 @@ export function App() {
         {selected ? (
           <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
         ) : view === "pulse" ? (
-          <PulseView t={t} />
+          <PulseView t={t} locale={locale} />
         ) : view === "portfolio" ? (
           <PortfolioView t={t} onOpen={setSelected} />
         ) : view === "runs" ? (
           <RunsView t={t} />
         ) : view === "profiles" ? (
           <ProfilesView t={t} />
+        ) : view === "quality" ? (
+          <QualityView t={t} locale={locale} />
         ) : (
           <ProjectsView t={t} onOpen={setSelected} />
         )}
@@ -149,6 +153,7 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
         {item("projects", t("nav.projects"), "▤")}
         {item("profiles", t("nav.profiles"), "◈")}
         {item("runs", t("nav.runs"), "▶")}
+        {item("quality", t("nav.quality"), "◇")}
         {item("portfolio", t("nav.portfolio"), "◫")}
       </nav>
       <LangSwitch t={t} locale={locale} setLocale={setLocale} />
@@ -221,9 +226,10 @@ function ProjectsView({ t, onOpen }: { t: T; onOpen: (id: string) => void }) {
       {error && <p className="error" role="alert">{error}</p>}
       {rows === null && !error && <p className="muted">{t("common.loading")}</p>}
       {rows && rows.length === 0 && (
-        <div className="empty-state">
+        <div className="empty-state compact">
           <p>{t("projects.empty")}</p>
           <p className="muted">{t("projects.emptyHint")}</p>
+          <button className="btn-primary" onClick={() => setShowForm(true)}>{t("projects.connect")}</button>
         </div>
       )}
       {rows && rows.length > 0 && (
@@ -572,21 +578,7 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
   );
 }
 
-// --- Pulse (system summary KPI + health + audit) ---------------------------
-function fmtBytes(n: number | null | undefined, na: string): string {
-  if (n === null || n === undefined) return na;
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  let v = n, i = 0;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
-}
-function fmtDuration(sec: number | null | undefined, na: string): string {
-  if (sec === null || sec === undefined) return na;
-  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+// --- Pulse (иерархия: состояние → риски → ресурсы → диагностика) -----------
 function Kpi({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="kpi">
@@ -596,19 +588,75 @@ function Kpi({ label, value, mono }: { label: string; value: string; mono?: bool
   );
 }
 
-function PulseView({ t }: { t: T }) {
+// Порог хранилища/памяти по факту ФС: 80–89% warning, >=90% critical (§VP6-D3).
+function usageLevel(used: number | null | undefined, total: number | null | undefined):
+  { pct: number | null; level: "ok" | "warn" | "crit" } {
+  if (!used || !total || total <= 0) return { pct: null, level: "ok" };
+  const pct = Math.round((used / total) * 100);
+  return { pct, level: pct >= 90 ? "crit" : pct >= 80 ? "warn" : "ok" };
+}
+
+// Измеритель: бар + used/total + процент + символ порога (не только цвет, §29.3).
+function Meter({ label, used, total, na }: {
+  label: string; used: number | null; total: number | null; na: string;
+}) {
+  const { pct, level } = usageLevel(used, total);
+  const sym = level === "crit" ? "■" : level === "warn" ? "▲" : "●";
+  return (
+    <div className="meter">
+      <div className="meter-top">
+        <span className="kpi-label">{label}</span>
+        <span className={`meter-val mono st-${level === "ok" ? "ok" : level === "warn" ? "warn" : "danger"}`}>
+          <span aria-hidden="true">{sym}</span> {fmtBytes(used, na)} / {fmtBytes(total, na)}
+          {pct !== null && <> · {pct}%</>}
+        </span>
+      </div>
+      <div className={`meter-bar level-${level}`} role="img"
+           aria-label={`${label}: ${pct ?? "?"}%`}>
+        <span className="meter-fill" style={{ width: `${pct ?? 0}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// Человекочитаемая семья события Audit (§VP6-D3): канонический код сохраняется.
+function auditFamily(eventType: string, t: T): string {
+  const head = (eventType.split(".")[0] || "").toLowerCase();
+  const map: Record<string, LocaleKey> = {
+    core: "audit.fam.core", profiles: "audit.fam.profiles", review: "audit.fam.review",
+    runs: "audit.fam.runs", work_orders: "audit.fam.workorders", workorders: "audit.fam.workorders",
+    product: "audit.fam.product", productmap: "audit.fam.product", projects: "audit.fam.projects",
+  };
+  return t(map[head] ?? "audit.fam.other");
+}
+
+// Bounded Planner → Builder → Reviewer handoff-trace (единственная major-анимация).
+function HandoffTrace({ t, active }: { t: T; active: boolean }) {
+  return (
+    <div className={`handoff-trace ${active ? "active" : ""}`} role="img"
+         aria-label="Planner → Builder → Reviewer">
+      <span className="ht-node">{t("runs.role.planner")}</span>
+      <span className="ht-link" aria-hidden="true" />
+      <span className="ht-node">{t("runs.role.builder")}</span>
+      <span className="ht-link" aria-hidden="true" />
+      <span className="ht-node">{t("runs.role.reviewer")}</span>
+    </div>
+  );
+}
+
+function PulseView({ t, locale }: { t: T; locale: Locale }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [sys, setSys] = useState<SystemSummary | null>(null);
   const [audit, setAudit] = useState<AuditPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(false);
+  const [auditFilter, setAuditFilter] = useState("");
   const na = t("sys.na");
 
   const refresh = useCallback(async () => {
     const [h, a] = await Promise.allSettled([api.health(), api.audit()]);
     if (h.status === "fulfilled") setHealth(h.value); else setHealth(null);
     if (a.status === "fulfilled") setAudit(a.value);
-    // system summary — отдельно: его отсутствие не рушит весь Pulse (partial).
     try { setSys((await api.systemSummary()).summary); setPartial(false); }
     catch { setPartial(true); }
     setError(h.status === "rejected" ? t("common.error") : null);
@@ -616,92 +664,168 @@ function PulseView({ t }: { t: T }) {
   useEffect(() => { refresh(); const id = setInterval(refresh, 5000); return () => clearInterval(id); }, [refresh]);
 
   const runner = health?.runner.status ?? "UNKNOWN";
+  const dbOk = health?.core.db.ok ?? false;
+  const overallReady = health?.status === "READY" && runner === "READY" && dbOk;
+  const disk = usageLevel(sys?.disk.used_bytes, sys?.disk.total_bytes);
+  const activeRuns = sys?.runs.active ?? 0;
+  const ownerReq = sys?.runs.owner_required ?? 0;
+
+  // Операционные риски (важнейшее первым).
+  const risks: { sym: string; cls: string; text: string; action?: string }[] = [];
+  if (disk.level === "crit")
+    risks.push({ sym: "■", cls: "st-danger", text: `${t("sys.storageCrit")} — ${disk.pct}%`,
+                 action: t("sys.storageAction") });
+  else if (disk.level === "warn")
+    risks.push({ sym: "▲", cls: "st-warn", text: `${t("sys.storageWarn")} — ${disk.pct}%` });
+  if (runner !== "READY")
+    risks.push({ sym: "▲", cls: "st-warn", text: t("runner.offlineHint") });
+  if (ownerReq > 0)
+    risks.push({ sym: "◆", cls: "st-warn", text: `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}` });
+
+  const auditEvents = (audit?.events ?? []).filter(
+    (e) => !auditFilter || e.event_type.toLowerCase().includes(auditFilter.toLowerCase()));
+
   return (
     <>
       <header className="page-head">
         <div>
           <h1>{t("health.title")}</h1>
-          <p className="muted page-desc">{t("sys.title")}</p>
+          <p className="muted page-desc">{t("sys.overall")}</p>
         </div>
         <button className="btn" onClick={refresh}>{t("common.refresh")}</button>
       </header>
       {error && <p className="error" role="alert">{error}</p>}
       {partial && !sys && <p className="warn" role="note">{t("common.partial")}</p>}
 
-      {/* Верхний ряд: службы (цвет + символ + текст, §29.3) */}
-      {health && (
-        <section className="panel" aria-labelledby="svc-h">
-          <h2 id="svc-h">{t("sys.services")}</h2>
-          <div className="kpi-grid kpi-grid-4">
-            <div className="kpi"><span className="kpi-label">{t("health.core")}</span>
-              <StatusBadge status={health.status} label={t(statusKey(health.status))} /></div>
-            <div className="kpi"><span className="kpi-label">{t("health.runner")}</span>
-              <StatusBadge status={runner} label={t(statusKey(runner))} /></div>
-            <div className="kpi"><span className="kpi-label">{t("health.db")}</span>
-              <StatusBadge status={health.core.db.ok ? "READY" : "DEGRADED"}
-                label={t(health.core.db.ok ? "status.READY" : "status.DEGRADED")} /></div>
-            <div className="kpi"><span className="kpi-label">{t("sys.web")}</span>
-              <span className="badge st-muted" role="status"><span aria-hidden="true">○</span>{" "}
-                {t("common.unknown")}</span></div>
-          </div>
-        </section>
-      )}
+      {/* Above fold: состояние Atlas + активный конвейер + следующий шаг */}
+      <section className="panel hero na-glow" aria-labelledby="ov-h">
+        <div className="hero-head">
+          <h2 id="ov-h">{t("sys.overall")}</h2>
+          <StatusBadge status={overallReady ? "READY" : "DEGRADED"}
+            label={t(overallReady ? "status.READY" : "status.DEGRADED")} />
+        </div>
+        <HandoffTrace t={t} active={activeRuns > 0} />
+        <p className="hero-line">
+          {activeRuns > 0
+            ? <>{t("sys.activePipeline")}: <b>{activeRuns}</b> · {t("sys.runsQueued")}: {sys?.runs.queued ?? 0}</>
+            : <span className="muted">{t("sys.noActive")}</span>}
+        </p>
+        <div className="next-action">
+          <span className="na-label">{t("overview.nextAction")}</span>
+          <span className="na-text">
+            {ownerReq > 0 ? `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}`
+              : risks.length === 0 ? t("sys.okAll") : risks[0].text}
+          </span>
+        </div>
+      </section>
 
-      {/* System summary — full-width, 4 сбалансированных KPI-колонки */}
-      <section className="panel" aria-labelledby="sys-h">
-        <h2 id="sys-h">{t("sys.title")}</h2>
-        {sys === null && !partial && <p className="muted">{t("common.loading")}</p>}
+      {/* Операционные риски (первыми) */}
+      <section className="panel" aria-labelledby="risk-h">
+        <h2 id="risk-h">{t("sys.risks")}</h2>
+        {risks.length === 0 ? (
+          <p className="ok-line"><span className="badge st-ok">● {t("sys.okAll")}</span></p>
+        ) : (
+          <ul className="risk-list">
+            {risks.map((r, i) => (
+              <li key={i} className={`risk ${r.cls}`}>
+                <span className={`badge ${r.cls}`}><span aria-hidden="true">{r.sym}</span> {r.text}</span>
+                {r.action && <span className="risk-action muted"> — {r.action}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Ресурсы и сервисы */}
+      <section className="panel" aria-labelledby="res-h">
+        <h2 id="res-h">{t("sys.resources")}</h2>
+        {health && (
+          <div className="svc-row">
+            <span className="svc"><span className="kpi-label">{t("health.core")}</span>
+              <StatusBadge status={health.status} label={t(statusKey(health.status))} /></span>
+            <span className="svc"><span className="kpi-label">{t("health.runner")}</span>
+              <StatusBadge status={runner} label={t(statusKey(runner))} /></span>
+            <span className="svc"><span className="kpi-label">{t("health.db")}</span>
+              <StatusBadge status={dbOk ? "READY" : "DEGRADED"}
+                label={t(dbOk ? "status.READY" : "status.DEGRADED")} /></span>
+            <span className="svc"><span className="kpi-label">{t("sys.web")}</span>
+              <span className="badge st-ok" role="status"><span aria-hidden="true">●</span>{" "}
+                {t("sys.webRendered")}</span></span>
+          </div>
+        )}
         {sys && (
+          <div className="res-grid">
+            <Meter label={t("sys.memory")} used={sys.memory.used_bytes}
+                   total={sys.memory.total_bytes} na={na} />
+            <Meter label={t("sys.disk")} used={sys.disk.used_bytes}
+                   total={sys.disk.total_bytes} na={na} />
+            <div className="kpi">
+              <span className="kpi-label">{t("sys.loadLabel")}</span>
+              <span className="kpi-val mono">{sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na}</span>
+              <span className="muted field-hint">{t("sys.loadNote")}
+                {sys.cpu.logical_cores !== null && ` · ${sys.cpu.logical_cores} ${t("sys.cores")}`}</span>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Диагностика — раскрываемая (OS/kernel/arch/migration/machine/Web backend) */}
+      {sys && (
+        <details className="panel diag">
+          <summary><h2 className="inline-h">{t("sys.diagnostics")}</h2>
+            <span className="muted field-hint">{t("sys.diagnosticsHint")}</span></summary>
           <div className="kpi-grid kpi-grid-4">
-            <Kpi label={`${t("sys.cpu")} (${t("sys.cores")})`}
-              value={sys.cpu.logical_cores !== null ? String(sys.cpu.logical_cores) : na} />
-            <Kpi label={t("sys.load")}
-              value={sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na} mono />
-            <Kpi label={t("sys.memory")}
-              value={`${fmtBytes(sys.memory.used_bytes, na)} / ${fmtBytes(sys.memory.total_bytes, na)}`} />
-            <Kpi label={t("sys.disk")}
-              value={`${fmtBytes(sys.disk.used_bytes, na)} / ${fmtBytes(sys.disk.total_bytes, na)}`} />
             <Kpi label={t("sys.os")} value={`${sys.os.os_name ?? na} ${sys.os.os_version ?? ""}`.trim()} />
             <Kpi label={t("sys.kernel")} value={sys.os.kernel ?? na} mono />
             <Kpi label={t("sys.arch")} value={sys.os.arch ?? na} mono />
             <Kpi label={t("sys.machine")} value={sys.os.machine_id ?? na} mono />
-            <Kpi label={t("sys.uptime")} value={fmtDuration(sys.host_uptime_s, na)} />
             <Kpi label={t("sys.version")} value={sys.atlas_version} mono />
             <Kpi label={t("sys.migration")} value={sys.db_migration ?? na} mono />
+            <Kpi label={t("sys.uptime")} value={fmtDuration(sys.host_uptime_s, na)} />
             <Kpi label={t("sys.backup")}
               value={sys.backup_age_s !== null ? fmtDuration(sys.backup_age_s, na) : t("sys.backupNone")} />
-            <Kpi label={t("sys.runsActive")}
-              value={sys.runs.active !== null ? String(sys.runs.active) : t("common.unknown")} />
-            <Kpi label={t("sys.runsQueued")}
-              value={sys.runs.queued !== null ? String(sys.runs.queued) : t("common.unknown")} />
             <Kpi label={t("sys.writers")}
               value={sys.leases.worktree_writers !== null ? String(sys.leases.worktree_writers) : t("common.unknown")} />
             <Kpi label={t("sys.profileLeases")}
               value={sys.leases.profile_leases !== null ? String(sys.leases.profile_leases) : t("common.unknown")} />
           </div>
-        )}
-        {sys && <p className="muted field-hint">{t("sys.lastRefresh")}: <span className="mono">{sys.collected_at}</span></p>}
-        {health && health.runner.status !== "READY" && (
-          <p className="warn" role="note">{t("runner.offlineHint")}</p>
-        )}
-      </section>
+          <p className="muted field-hint">{t("sys.web")}: {t("common.unknown")} — {t("sys.webBackend")}</p>
+          <p className="muted field-hint">{t("sys.lastRefresh")}:{" "}
+            <time dateTime={sys.collected_at}>{fmtLocal(sys.collected_at, locale)}</time></p>
+        </details>
+      )}
 
+      {/* Audit — человекочитаемые метки + локальное время + фильтр (raw код сохранён) */}
       <section className="panel" aria-labelledby="a-h">
-        <h2 id="a-h">{t("audit.title")}</h2>
-        {audit && <p className="muted">{t("audit.total")}: <span className="mono">{audit.total}</span></p>}
-        {audit && audit.events.length === 0 && <p className="muted">{t("audit.empty")}</p>}
-        {audit && audit.events.length > 0 && (
+        <div className="hero-head">
+          <h2 id="a-h">{t("audit.title")}</h2>
+          {audit && <span className="muted">{t("audit.total")}: <span className="mono">{audit.total}</span></span>}
+        </div>
+        <label className="field inline">
+          <span>{t("audit.filter")}</span>
+          <input value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)}
+                 placeholder="review / profiles / runs…" />
+        </label>
+        {audit && auditEvents.length === 0 && <p className="muted">{t("audit.empty")}</p>}
+        {audit && auditEvents.length > 0 && (
           <div className="tbl-wrap">
             <table className="tbl">
               <thead><tr>
-                <th scope="col">{t("audit.title")}</th><th scope="col">actor</th><th scope="col">time (UTC)</th>
+                <th scope="col">{t("audit.event")}</th>
+                <th scope="col">{t("audit.actor")}</th>
+                <th scope="col">{t("audit.time")}</th>
               </tr></thead>
               <tbody>
-                {audit.events.map((e) => (
+                {auditEvents.map((e) => (
                   <tr key={e.id}>
-                    <td className="mono">{e.event_type}</td>
+                    <td>
+                      <span className="badge st-info">{auditFamily(e.event_type, t)}</span>{" "}
+                      <span className="mono muted audit-code">{e.event_type}</span>
+                    </td>
                     <td>{e.actor}</td>
-                    <td className="mono">{e.created_at}</td>
+                    <td><time dateTime={e.created_at} title={`${e.created_at} UTC`}>
+                      {fmtLocal(e.created_at, locale)}</time>{" "}
+                      <span className="muted rel">· {fmtRelative(e.created_at, locale)}</span></td>
                   </tr>
                 ))}
               </tbody>

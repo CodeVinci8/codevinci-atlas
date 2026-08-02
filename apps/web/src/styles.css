@@ -218,9 +218,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 @media (max-width: 460px) {
   .page-head h1 { font-size: 20px; }
-  .nav-item { padding: 8px 10px; }
+  .nav-item { padding: 10px 12px; }
   .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .kv dt { margin-top: 8px; }
+}
+/* Тач-таргеты на мобиле — не менее 44px (WCAG 2.2 §29.2). */
+@media (max-width: 860px) {
+  .nav-item, .btn, .btn-primary, .btn-danger, .seg-opt, .seg button, .tab {
+    min-height: 44px; display: inline-flex; align-items: center;
+  }
+  .nav-item { justify-content: flex-start; }
 }
 
 /* --- VP-3 Product Map --------------------------------------------------- */
@@ -345,6 +352,96 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .kpi-grid-4 { grid-template-columns: 1fr; }
   .card-grid { grid-template-columns: 1fr; }
   .lang-seg { margin: 0; }
+}
+
+/* --- VP-6: Ember refinement (Pulse hierarchy / meters / handoff) --------- */
+/* Сдержанный оранжевый radial glow ТОЛЬКО вокруг активного (hero/CTA), §28. */
+.na-glow {
+  position: relative;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--ember) 9%, transparent), transparent 55%),
+    var(--surface);
+  border-color: color-mix(in srgb, var(--ember) 26%, var(--border));
+}
+.panel-danger { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hero-head h2 { margin: 0; }
+.hero-line { margin: 12px 0 0; font-size: 14px; }
+.inline-h { display: inline; font-size: 15px; margin: 0; }
+.ok-line { margin: 4px 0 0; }
+
+/* Planner → Builder → Reviewer handoff-trace (единственная major-анимация) */
+.handoff-trace { display: flex; align-items: center; gap: 0; margin: 14px 0 4px; flex-wrap: wrap; }
+.ht-node {
+  padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+}
+.ht-link {
+  width: 40px; height: 2px; background: var(--border); position: relative; overflow: hidden;
+}
+.handoff-trace.active .ht-node { color: var(--ember-strong); border-color: color-mix(in srgb, var(--ember) 40%, var(--border)); }
+.handoff-trace.active .ht-link { background: color-mix(in srgb, var(--ember) 30%, var(--border)); }
+.handoff-trace.active .ht-link::after {
+  content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+  background: linear-gradient(90deg, transparent, var(--ember), transparent);
+  animation: ht-sweep 1.6s linear infinite;
+}
+@keyframes ht-sweep { to { left: 100%; } }
+
+/* Измерители памяти/диска — бар + текстовый порог (не только цвет) */
+.res-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 12px; }
+.meter { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px; }
+.meter-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.meter-val { font-size: 13px; }
+.meter-bar { height: 8px; border-radius: 6px; background: var(--elevated); overflow: hidden; border: 1px solid var(--border-soft); }
+.meter-fill { display: block; height: 100%; background: var(--ok); transition: width 220ms ease; }
+.meter-bar.level-warn .meter-fill { background: var(--warn); }
+.meter-bar.level-crit .meter-fill { background: var(--danger); }
+
+.svc-row { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 6px; }
+.svc { display: flex; align-items: center; gap: 8px; }
+.risk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.risk { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.risk-action { font-size: 12.5px; }
+.diag summary { cursor: pointer; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.diag summary::-webkit-details-marker { color: var(--ember); }
+.diag[open] .kpi-grid { margin-top: 14px; }
+.audit-code { font-size: 11.5px; }
+.rel { font-size: 12px; }
+
+/* --- VP-6: Quality screen --- */
+.q-summary { margin-bottom: 14px; }
+.q-filters { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 16px; }
+.finding-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.finding {
+  border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; background: var(--surface-2);
+  border-left: 3px solid var(--border);
+}
+.finding.sev-blocker { border-left-color: var(--danger); }
+.finding.sev-major { border-left-color: var(--warn); }
+.finding.sev-minor { border-left-color: var(--info); }
+.finding.sev-info { border-left-color: var(--faint); }
+.finding-blocking { background: color-mix(in srgb, var(--danger) 6%, var(--surface-2)); }
+.finding-waived { opacity: .6; }
+.finding-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.finding-crit { font-weight: 600; }
+.finding-code { font-size: 11px; }
+.finding-kv { grid-template-columns: max-content 1fr; }
+.finding-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.waiver-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.waiver-form input { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.claim-list { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+
+/* Компактные empty states — без полупустой панели (§ owner-directed) */
+.empty-state.compact { padding: 22px 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.empty-state.compact .btn-primary { margin-top: 6px; text-decoration: none; }
+
+/* handoff-trace: узкие экраны */
+@media (max-width: 460px) {
+  .ht-link { width: 20px; }
+  .q-filters { gap: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
