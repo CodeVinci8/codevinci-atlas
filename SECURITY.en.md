@@ -36,6 +36,15 @@ writers, lifecycle scripts, exposed panel.
   `VERIFIED` requires resolvable evidence + hash match; approval never turns a
   hypothesis into `VERIFIED`. MD/JSON export carries no credentials, environment
   dumps, raw auth paths, or unsafe HTML.
+- **Work Orders & Context (VP-4): isolation and non-escalation.** JobPackage and
+  HandoffPackage are bounded and immutable, with **no** repo/full chat/logs/
+  credentials/env; capabilities come only from an allowlist and context does not
+  expand authority (§30.2). The fresh consumer (`scripts/vp4_fresh_consumer.py`)
+  runs as a separate process in a clean environment — no DB, credentials, full
+  repo, or prior chat; the compact fallback fails closed with `OWNER_REQUIRED`;
+  there are no real provider calls. Handoff rejects tamper/stale/wrong-project/
+  wrong-version/wrong-HEAD/over-capability. The audit log is append-only and
+  redacted.
 
 ## Cookie gate (§30.3)
 

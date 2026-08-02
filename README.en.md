@@ -29,8 +29,20 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
   to Markdown/JSON. Every fact carries an explicit truth status; `VERIFIED`
   requires resolvable evidence.
 
-No VP is currently active. Next stage — **VP-4: Work Orders & Context**
-(Master Spec §37) — **not started**; it begins only by separate owner decision.
+Currently in review:
+
+- **VP-4 — Work Orders & Context: IMPLEMENTED (26/26 PASS)**
+  ([`docs/vp/VP-4.md`](docs/vp/VP-4.md), [`docs/en/WORK_ORDERS.md`](docs/en/WORK_ORDERS.md)) —
+  deterministic VP Spec from an accepted Brief/Map, executable Work Orders with
+  versioned lifecycle and one-writer leases, controlled optimizer decisions
+  (READY/MERGE/SPLIT/OWNER_REQUIRED/SWITCH_PROFILE), bounded immutable JobPackage,
+  Context Governor with durable checkpoints and handoff, and a **fresh isolated
+  consumer** that reconstructs state from the HandoffPackage alone. Live DB
+  migrated to `0004_work_orders`; the exact PR / CI head / merge SHA are recorded
+  by a post-merge sync commit.
+
+After VP-4 merges, the next stage — **VP-5: Run Engine & Role Routing** — is
+**not started**; it begins only by separate owner decision.
 
 ## Quick start
 
@@ -57,6 +69,7 @@ curl -s http://127.0.0.1:3210/api/v1/health
 python3 scripts/run_vp1_acceptance.py      # 17/17
 python3 scripts/run_vp2_acceptance.py      # 20/20
 python3 scripts/run_vp3_acceptance.py      # 26/26 (VP-3)
+python3 scripts/run_vp4_acceptance.py      # 26/26 (VP-4)
 ```
 
 Unit/integration tests for Core/Runner (no stack):

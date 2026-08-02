@@ -43,6 +43,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(productmap_router)
     app.include_router(portfolio_router)
 
+    from .api_workorders import router as workorders_router
+    app.include_router(workorders_router)
+
     @app.get("/api/v1/health")
     def health() -> JSONResponse:
         # Core проверяет собственную БД и Runner (честный degraded).

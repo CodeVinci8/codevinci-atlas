@@ -339,3 +339,243 @@ class IdempotencyKey(Base):
     project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
     entity_id: Mapped[str] = mapped_column(String(40), default="")
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+# --- VP-4 Work Orders & Context (Master Spec §16, §37) ---------------------
+# Versioned VP Spec из точного принятого Brief/Map/approval, executable Work
+# Orders с жизненным циклом, история переходов, решения оптимизатора, immutable
+# JobPackage, checkpoint, immutable HandoffPackage, ack/reject, rotation.
+# Всё содержимое bounded + redacted; content_hash — sha256 над canonical-JSON.
+# Секреты в durable-состояние не попадают. Таблицы создаёт только Alembic.
+
+
+class VpSpec(Base):
+    """Версионный VP Spec, детерминированно выведенный из принятого Brief/Map (§37).
+
+    Связывает точное принятое состояние VP-3 (approval/brief/map/envelope/
+    decisions-хеши) и baseline. Правка = новая версия; content immutable."""
+
+    __tablename__ = "vp_specs"
+    __table_args__ = (UniqueConstraint("project_id", "vp_key", "version",
+                                       name="uq_vpspec_project_vp_version"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_key: Mapped[str] = mapped_column(String(80), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    parent_id: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)  # draft|active|superseded
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    # Точная привязка источника (§37 «bind exact accepted VP-3 state»).
+    approval_id: Mapped[str] = mapped_column(String(40), default="")
+    brief_id: Mapped[str] = mapped_column(String(40), default="")
+    brief_hash: Mapped[str] = mapped_column(String(80), default="")
+    map_version_id: Mapped[str] = mapped_column(String(40), default="")
+    map_hash: Mapped[str] = mapped_column(String(80), default="")
+    envelope_hash: Mapped[str] = mapped_column(String(80), default="")
+    decisions_hash: Mapped[str] = mapped_column(String(80), default="")
+    baseline_branch: Mapped[str] = mapped_column(String(255), default="")
+    baseline_head: Mapped[str] = mapped_column(String(64), default="")
+    content_json: Mapped[str] = mapped_column(Text, default="{}")   # redacted, bounded
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class WorkOrder(Base):
+    """Executable Work Order с жизненным циклом (§16.1, §37).
+
+    Оптимистичная ``version`` защищает переходы от гонок. Связывает точные
+    хеши источника; approval владельца не расширяет capabilities."""
+
+    __tablename__ = "work_orders"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_spec_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_key: Mapped[str] = mapped_column(String(80), default="")
+    wo_key: Mapped[str] = mapped_column(String(80), default="")
+    role: Mapped[str] = mapped_column(String(20), default="builder")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    goal: Mapped[str] = mapped_column(Text, default="")
+    parent_id: Mapped[str] = mapped_column(String(40), default="")   # split/merge lineage
+    origin: Mapped[str] = mapped_column(String(20), default="spec")  # spec|merge|split
+    # Привязка источника.
+    approval_id: Mapped[str] = mapped_column(String(40), default="")
+    spec_hash: Mapped[str] = mapped_column(String(80), default="")
+    spec_version: Mapped[int] = mapped_column(Integer, default=1)
+    brief_hash: Mapped[str] = mapped_column(String(80), default="")
+    map_hash: Mapped[str] = mapped_column(String(80), default="")
+    envelope_hash: Mapped[str] = mapped_column(String(80), default="")
+    baseline_branch: Mapped[str] = mapped_column(String(255), default="")
+    baseline_head: Mapped[str] = mapped_column(String(64), default="")
+    content_json: Mapped[str] = mapped_column(Text, default="{}")   # scope/criteria/checks/... redacted
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    version: Mapped[int] = mapped_column(Integer, default=1)         # optimistic
+    lease_id: Mapped[str] = mapped_column(String(40), default="")    # активная writer-аренда
+    writer_holder: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class WorkOrderEvent(Base):
+    """Append-only история переходов Work Order (§16.1, §37)."""
+
+    __tablename__ = "work_order_events"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    from_status: Mapped[str] = mapped_column(String(20), default="")
+    to_status: Mapped[str] = mapped_column(String(20), default="")
+    reason_code: Mapped[str] = mapped_column(String(40), default="")
+    note: Mapped[str] = mapped_column(Text, default="")            # redacted, bounded
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class OptimizerDecision(Base):
+    """Записанное решение оптимизатора (§16.2). Scope/criteria не меняет."""
+
+    __tablename__ = "optimizer_decisions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_spec_id: Mapped[str] = mapped_column(String(40), default="")
+    decision: Mapped[str] = mapped_column(String(30), index=True)
+    reason_code: Mapped[str] = mapped_column(String(40), default="")
+    explanation: Mapped[str] = mapped_column(Text, default="")     # bounded
+    affected_json: Mapped[str] = mapped_column(Text, default="[]")  # Work Order id-шники
+    exact_next_action: Mapped[str] = mapped_column(Text, default="")
+    inputs_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class JobPackage(Base):
+    """Immutable JobPackage: только релевантный контекст (§16.3).
+
+    Не содержит: весь repo, полный chat, повторяющиеся logs, credentials,
+    полные env-дампы, посторонние идеи. Bounded по байтам/числу элементов."""
+
+    __tablename__ = "job_packages"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    content_json: Mapped[str] = mapped_column(Text, default="{}")   # redacted, bounded
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    provenance_json: Mapped[str] = mapped_column(Text, default="[]")  # [{source, ref, hash}]
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]")  # allowlisted
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    counts_json: Mapped[str] = mapped_column(Text, default="{}")
+    compact: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class WoCheckpoint(Base):
+    """Durable checkpoint Work Order (§16.5, §21). Hash-verifiable, без секретов."""
+
+    __tablename__ = "wo_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), index=True)
+    job_package_id: Mapped[str] = mapped_column(String(40), default="")
+    vp_key: Mapped[str] = mapped_column(String(80), default="")
+    baseline_head: Mapped[str] = mapped_column(String(64), default="")
+    current_head: Mapped[str] = mapped_column(String(64), default="")
+    changed_files_json: Mapped[str] = mapped_column(Text, default="[]")
+    commands_json: Mapped[str] = mapped_column(Text, default="[]")
+    failures_json: Mapped[str] = mapped_column(Text, default="[]")
+    completed_criteria_json: Mapped[str] = mapped_column(Text, default="[]")
+    remaining_criteria_json: Mapped[str] = mapped_column(Text, default="[]")
+    decisions_json: Mapped[str] = mapped_column(Text, default="[]")
+    impacted_checks_json: Mapped[str] = mapped_column(Text, default="[]")
+    artifact_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    lease_state_json: Mapped[str] = mapped_column(Text, default="{}")
+    writer_holder: Mapped[str] = mapped_column(String(80), default="")
+    exact_next_action: Mapped[str] = mapped_column(Text, default="")
+    cause: Mapped[str] = mapped_column(String(40), default="")
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class HandoffPackage(Base):
+    """Immutable HandoffPackage продолжения новой сессии (§16.4, §37)."""
+
+    __tablename__ = "handoff_packages"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_key: Mapped[str] = mapped_column(String(80), default="")
+    vp_spec_id: Mapped[str] = mapped_column(String(40), default="")
+    work_order_id: Mapped[str] = mapped_column(String(40), index=True)
+    job_package_id: Mapped[str] = mapped_column(String(40), default="")
+    checkpoint_id: Mapped[str] = mapped_column(String(40), default="")
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    content_json: Mapped[str] = mapped_column(Text, default="{}")   # redacted, bounded
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    baseline_head: Mapped[str] = mapped_column(String(64), default="")
+    current_head: Mapped[str] = mapped_column(String(64), default="")
+    spec_version: Mapped[int] = mapped_column(Integer, default=1)
+    brief_hash: Mapped[str] = mapped_column(String(80), default="")
+    map_hash: Mapped[str] = mapped_column(String(80), default="")
+    approval_id: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(20), default="issued", index=True)  # issued|acknowledged|rejected|superseded
+    compact: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class HandoffAck(Base):
+    """Append-only ack/reject HandoffPackage свежей сессией (§16.4, §37)."""
+
+    __tablename__ = "handoff_acks"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    handoff_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    result: Mapped[str] = mapped_column(String(12), default="ACK")  # ACK|REJECT
+    reason_code: Mapped[str] = mapped_column(String(40), default="")
+    ack_hash: Mapped[str] = mapped_column(String(80), default="")
+    baseline_ack: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="consumer")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class RotationRecord(Base):
+    """Запись безопасной ротации (§16.5). Один writer; lease освобождается один раз."""
+
+    __tablename__ = "rotation_records"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), index=True)
+    trigger: Mapped[str] = mapped_column(String(40), default="")
+    checkpoint_id: Mapped[str] = mapped_column(String(40), default="")
+    handoff_id: Mapped[str] = mapped_column(String(40), default="")
+    next_profile_request: Mapped[str] = mapped_column(String(80), default="")
+    lease_released: Mapped[bool] = mapped_column(Boolean, default=False)
+    one_writer_ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    steps_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(20), default="started")
+    exact_next_action: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)

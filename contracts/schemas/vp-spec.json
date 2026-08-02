@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/vp-spec.json",
+  "title": "VpSpecContent",
+  "description": "Версионный VP Spec, детерминированно выведенный из принятого Brief/Map/approval (Master Spec §16, §37). Без секретов.",
+  "type": "object",
+  "required": ["vp_key", "result", "definition_of_done", "inputs", "outputs",
+               "user_scenario", "immutable_constraints", "out_of_scope",
+               "acceptance_criteria", "required_checks", "stop_conditions",
+               "baseline", "exact_next_action"],
+  "properties": {
+    "vp_key": {"type": "string"},
+    "result": {"type": "string"},
+    "definition_of_done": {"type": "array", "items": {"type": "string"}},
+    "inputs": {"type": "array", "items": {"type": "string"}},
+    "outputs": {"type": "array"},
+    "user_scenario": {"type": "string"},
+    "interfaces": {"type": "array"},
+    "files_in_scope": {"type": "array"},
+    "immutable_constraints": {"type": "array", "items": {"type": "string"}},
+    "out_of_scope": {"type": "array"},
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "required"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "required": {"type": "boolean"},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "required_checks": {
+      "type": "array",
+      "items": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}
+    },
+    "negative_tests": {"type": "array"},
+    "regression_tests": {"type": "array"},
+    "demonstration": {"type": "string"},
+    "stop_conditions": {"type": "array", "items": {"type": "string"}},
+    "baseline": {
+      "type": "object",
+      "required": ["branch", "head"],
+      "properties": {"branch": {"type": "string"}, "head": {"type": "string"}}
+    },
+    "exact_next_action": {"type": "string"}
+  }
+}

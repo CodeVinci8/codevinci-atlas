@@ -216,6 +216,75 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 `0003_product_map`; backup снят до миграции. Смёржен в `main` через PR #4
 (squash), merge-commit `07ed6f4` `CodeVinci8/codevinci-atlas`.
 
+## VP-4 — Work Orders & Context (решения)
+
+- **VP4-D1 (VP Spec — детерминированный вывод).** VP Spec выводится без вызовов
+  модели из ОДНОГО точного принятого Brief/Map/approval
+  (`workorders.build_vp_spec_content`), версионный, с `content_hash`
+  (canonical-JSON, sorted keys). Work Order связывает точные хеши Spec/Brief/Map
+  и baseline (§16.1); правка — новая версия, approved не мутируется.
+- **VP4-D2 (Work Order lifecycle — атомарность).** Состояния и `VALID_TRANSITIONS`
+  фиксированы; валидный переход персистится, невалидный отклоняется **атомарно**
+  (`INVALID_TRANSITION`, без частичной мутации); история переходов append-only
+  (`work_order_events`).
+- **VP4-D3 (concurrency + идемпотентность).** Оптимистичная блокировка через
+  версию (расхождение → `VERSION_CONFLICT`, без перезаписи); `Idempotency-Key` →
+  повтор не создаёт дублей. Стабильные коды:
+  `VERSION_CONFLICT/INVALID_TRANSITION/WRITER_CONFLICT/OWNER_REQUIRED/`
+  `PROJECT_NOT_AVAILABLE/SCOPE_DRIFT/SOURCE_STALE/HANDOFF_STALE/`
+  `HASH_MISMATCH/CAPABILITY_DENIED/CRITERIA_LOST`.
+- **VP4-D4 (один writer — durable-аренда).** На worktree ровно одна аренда
+  (`UNIQUE(worktree, released_at IS NULL)`); **автоугона нет** (нужен reconcile).
+  Lease держится только в `active/checkpointed/handoff_ready`; освобождается на
+  терминале/блокировке и на границе ротации. Вторая параллельная запись →
+  `WRITER_CONFLICT`.
+- **VP4-D5 (оптимизатор — контролируемые решения).** Выходы —
+  `READY/MERGE_TASKS/SPLIT_AT_CHECKPOINT/SWITCH_PROFILE/OWNER_REQUIRED`. Merge —
+  только совместимые и с **сохранением каждого критерия** (criterion
+  conservation, иначе `CRITERIA_LOST`); split — только на durable checkpoint с
+  полным отображением критериев на детей. Оптимизатор **не меняет** scope и
+  acceptance criteria и **не** делает реальной маршрутизации ролей (это VP-5).
+- **VP4-D6 (bounded JobPackage; данные — не команды).** JobPackage
+  детерминирован, immutable, с provenance; **без** repo/полного чата/логов/
+  credentials/env; capacity честно `UNKNOWN`; capabilities — только из allowlist.
+  Контекст **не расширяет** права/авторизацию (§30.2): строка внутри пакета не
+  даёт shell/network/Git/provider/write.
+- **VP4-D7 (Context Governor + ротация).** Пороги/триггеры детерминированы, без
+  выдуманной ёмкости (`UNKNOWN`); checkpoint durable и hash-verifiable, переживает
+  рестарт Core; ротация по безопасной последовательности сохраняет одного writer
+  (lease освобождается на границе), продолжение восстанавливает работу.
+- **VP4-D8 (Handoff + свежая реконструкция).** HandoffPackage содержит все
+  обязательные поля, детерминированный hash, без запрещённого; отклоняет
+  tamper/stale/wrong-project/wrong-version/wrong-HEAD/over-capability. **Свежий
+  изолированный потребитель** (`scripts/vp4_fresh_consumer.py`, без atlas_core,
+  БД, credentials, полного repo и старого чата) восстанавливает состояние и
+  точное следующее действие из handoff-only и валиден по
+  `contracts/schemas/run-result.json`. Compact-fallback — локальный
+  детерминированный harness: сохраняет инварианты или fail-closed
+  `OWNER_REQUIRED`. **Реальных provider-вызовов нет.**
+- **VP4-D9 (упаковка образа + валидатор схем).** Core-образ содержит и исполняет
+  изолированный consumer и контракт `run-result.json`
+  (`infra/docker/core.Dockerfile` копирует `scripts/vp4_fresh_consumer.py` и
+  `contracts/`); регрессия — `scripts/check_core_image.sh` и
+  `tests/test_vp4_packaging.py` (CI-job `core-image`). Наш валидатор схем —
+  **документированное подмножество** JSON Schema (`type/enum/pattern/min/max/`
+  `required/properties/additionalProperties(bool)/items`), не полный draft
+  2020-12; схемы VP-4 держатся внутри этого подмножества.
+- **VP4-D10 (Web: Work Orders console).** Собственная консоль Work Orders
+  (VP Spec, Work Orders + переходы, решения оптимизатора, checkpoint/handoff,
+  реконструкция), тёмная тема по умолчанию сохранена, RU/EN-паритет, a11y,
+  responsive. Полная оркестрация/run-стрим — VP-5/VP-8, в VP-4 UI не тянется.
+
+## VP-4 — ГОТОВ (26/26), НА РЕВЬЮ
+
+Приёмка `scripts/run_vp4_acceptance.py`: **26/26 PASS** против реально
+развёрнутого стека (Compose Core/Web + systemd Runner) и синтетических фикстур
+(удаляются по точным ID; append-only Audit сохраняется). Evidence с SHA-256 —
+`var/artifacts/vp4/`. Живая БД мигрирована на `0004_work_orders`; backup снят до
+миграции. Reconstruction исполняется внутри Core-образа. PR открыт, ожидается CI
+на точном head-SHA и squash-merge; точные PR #, CI head и merge-SHA фиксируются
+post-merge sync-коммитом в `main`.
+
 ## Требуют отдельного подтверждения владельца
 
 - Создание/использование GitHub-репозитория за пределами read-only (репозиторий

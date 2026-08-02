@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/handoff-package.json",
+  "title": "HandoffPackageContent",
+  "description": "Immutable HandoffPackage VP-4 (Master Spec §16.4, §37). Все обязательные поля продолжения; без credentials и полного чата.",
+  "type": "object",
+  "required": ["schema_version", "ids", "goal", "finished_result",
+               "immutable_constraints", "source_of_truth", "baseline_head",
+               "current_head", "changed_files", "commands", "failures",
+               "acceptance_matrix", "decisions", "exact_next_action",
+               "prohibited_actions", "artifact_refs", "capabilities", "binding"],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "ids": {
+      "type": "object",
+      "required": ["project_id", "vp_key", "vp_spec_id", "work_order_id", "checkpoint_id"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "vp_key": {"type": "string"},
+        "vp_spec_id": {"type": "string"},
+        "work_order_id": {"type": "string"},
+        "job_package_id": {"type": "string"},
+        "checkpoint_id": {"type": "string"},
+        "correlation_id": {"type": "string"}
+      }
+    },
+    "role": {"type": "string"},
+    "goal": {"type": "string"},
+    "finished_result": {"type": "string"},
+    "immutable_constraints": {"type": "array", "items": {"type": "string"}},
+    "source_of_truth": {"type": "array", "items": {"type": "string"}},
+    "baseline_head": {"type": "string"},
+    "current_head": {"type": "string"},
+    "changed_files": {"type": "array"},
+    "commands": {"type": "array"},
+    "failures": {"type": "array"},
+    "acceptance_matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "required": {"type": "boolean"},
+          "status": {"type": "string", "enum": ["completed", "remaining"]}
+        }
+      }
+    },
+    "decisions": {"type": "array"},
+    "exact_next_action": {"type": "string"},
+    "prohibited_actions": {"type": "array", "items": {"type": "string"}},
+    "artifact_refs": {"type": "array"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "binding": {
+      "type": "object",
+      "required": ["spec_version", "brief_hash", "map_hash", "approval_id"],
+      "properties": {
+        "spec_version": {"type": "integer"},
+        "spec_hash": {"type": "string"},
+        "brief_hash": {"type": "string"},
+        "map_hash": {"type": "string"},
+        "envelope_hash": {"type": "string"},
+        "approval_id": {"type": "string"}
+      }
+    }
+  }
+}

@@ -13,6 +13,8 @@ updated together when the public contract changes (Master Spec §9).
 - [`INSTALL.md`](INSTALL.md) — setup and run (VP-1).
 - [`OPERATIONS.md`](OPERATIONS.md) — operations (VP-1).
 - [`PROJECT_WORKSPACE.md`](PROJECT_WORKSPACE.md) — connecting projects (VP-2).
+- [`PRODUCT_MAP.md`](PRODUCT_MAP.md) — Product Map and VP-3 API.
+- [`WORK_ORDERS.md`](WORK_ORDERS.md) — Work Orders & Context Engine, VP-4 API.
 
 ## Canonical Russian sources
 

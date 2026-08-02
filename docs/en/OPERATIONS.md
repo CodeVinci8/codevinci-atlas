@@ -39,6 +39,21 @@
   reconciliation after the writer dies; **continuation to one success** without a
   second writer.
 
+## Work Orders & Context (VP-4)
+
+- The live migration `0003_product_map → 0004_work_orders` is applied by the
+  entrypoint (`alembic upgrade head`); upgrade order — **backup → migrate →
+  health → switch**. VP-0…VP-3 data is preserved.
+- **Reconstruction runs inside the Core image** as an isolated process
+  `scripts/vp4_fresh_consumer.py` against the `contracts/schemas/run-result.json`
+  contract. The image must ship both — `infra/docker/core.Dockerfile` copies
+  `scripts/vp4_fresh_consumer.py` and `contracts/`. Packaging regression:
+  `bash scripts/check_core_image.sh <image>` (CI job `core-image`); after
+  rebuilding the image verify the consumer runs inside the container.
+- Context rotation and profile switch preserve **one writer**: the lease is
+  released at the boundary. No auto-takeover — reconcile is required.
+- Acceptance: `python3 scripts/run_vp4_acceptance.py` (26/26, stack up).
+
 ## Backup (`atlas backup`)
 
 ```bash

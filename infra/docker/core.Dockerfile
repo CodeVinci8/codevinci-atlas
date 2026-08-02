@@ -22,6 +22,12 @@ COPY apps/core /app/apps/core
 COPY apps/runner /app/apps/runner
 COPY alembic.ini /app/alembic.ini
 
+# VP-4 runtime (§37 Phase H): изолированный fresh-session consumer и контракты
+# схем. Копируем ТОЛЬКО нужные runtime-файлы, а не весь репозиторий — consumer
+# чистый (stdlib), без доступа к БД/credentials; contracts/ содержит лишь JSON-схемы.
+COPY scripts/vp4_fresh_consumer.py /app/scripts/vp4_fresh_consumer.py
+COPY contracts /app/contracts
+
 ENV PYTHONPATH=/app/apps/core:/app/apps/runner \
     PATH=/app/.venv/bin:$PATH \
     ATLAS_DATA_DIR=/var/lib/codevinci-atlas \

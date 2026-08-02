@@ -35,6 +35,23 @@ Master Spec §18, §32. Принцип: полная регрессия посл
 - **Manual-real** (`scripts/manual_real_probe.py`): реальные A→B probe после
   owner-логина. Не входит в обычную CI (§32.4).
 
+## Приёмка VP-4
+
+- **Юниты/интеграция** (`tests/test_vp4_workorders.py`,
+  `tests/test_vp4_packaging.py`): lifecycle/переходы, concurrency +
+  идемпотентность, оптимизатор + сохранение критериев merge/split, JobPackage
+  bounded, checkpoint/handoff, **реальная изолированная реконструкция**
+  (subprocess), regression, упаковка образа (consumer+contracts) и подмножество
+  схем.
+- **Приёмочный прогон** (`scripts/run_vp4_acceptance.py`): 26 критериев против
+  развёрнутого стека; синтетические фикстуры удаляются по точным ID, append-only
+  Audit сохраняется; миграция из пустой БД и из копии живой `0003`; evidence с
+  SHA-256 в `var/artifacts/vp4/`.
+- **Схемы** — `scripts/validate_schemas.py`; **образ** —
+  `scripts/check_core_image.sh` (CI-job `core-image`). Reconstruction — INTEGRATION
+  (реальный subprocess, не мок): изменение кода/схем/Docker/приёмки → повторный
+  полный прогон 26/26.
+
 ## Обоснование выбора тестов (VP-0)
 
 - Изоляция и один writer — HIGH_RISK → полный релевантный набор + OS-DAC.

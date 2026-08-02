@@ -240,6 +240,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .db-acc { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .db-rej { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 .db-prop { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+/* VP-4 Work Order статусы — символ+текст+цвет, не только цвет (§29.3) */
+.tb-info   { background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info); }
+.tb-active { background: color-mix(in srgb, var(--ember) 18%, transparent); color: var(--ember); }
+.wo-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.wo-crit { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
+.wo-crit .mono { color: var(--muted); }
+@media (min-width: 900px) { .wo-detail-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 
 .pm-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }

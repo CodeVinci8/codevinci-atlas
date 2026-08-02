@@ -56,6 +56,21 @@
 fresh session + handoff → continue`. Аренда A освобождается **до** получения
 аренды B — второго writer не возникает. Настоящий лимит не провоцируется.
 
+## Work Orders & Context (VP-4)
+
+- Живая миграция `0003_product_map → 0004_work_orders` применяется entrypoint'ом
+  (`alembic upgrade head`); порядок обновления — **backup → migrate → health →
+  switch**. Данные VP-0…VP-3 сохраняются.
+- **Реконструкция исполняется внутри Core-образа** изолированным процессом
+  `scripts/vp4_fresh_consumer.py` по контракту `contracts/schemas/run-result.json`.
+  Образ обязан их содержать — `infra/docker/core.Dockerfile` копирует
+  `scripts/vp4_fresh_consumer.py` и `contracts/`. Регрессия упаковки:
+  `bash scripts/check_core_image.sh <image>` (CI-job `core-image`); после
+  пересборки образа проверить, что consumer запускается внутри контейнера.
+- Ротация контекста и смена профиля сохраняют **одного writer**: lease
+  освобождается на границе (см. выше). Автоугона нет — нужен reconcile.
+- Приёмка: `python3 scripts/run_vp4_acceptance.py` (26/26, стек поднят).
+
 ## Резервное копирование (`atlas backup`)
 
 ```bash
