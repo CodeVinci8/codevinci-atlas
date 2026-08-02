@@ -1,8 +1,8 @@
 # VP-2 — Project Workspace (исполнимый спек)
 
-**Статус:** реализован; закрывается через приёмку и PR (не merged, пока это не так).
+**Статус:** ЗАВЕРШЁН — 20/20 PASS, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §35.
-**Ветка:** `atlas/vp-2-project-workspace`.
+**Ветка:** `atlas/vp-2-project-workspace` · **PR:** #3 (squash) · **merge:** `a14472a`.
 
 ## Result
 

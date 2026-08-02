@@ -118,7 +118,8 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 
 Приёмка `scripts/run_vp1_acceptance.py`: 17/17 PASS против реально развёрнутого
 стека (Compose Core/Web + systemd Runner). Evidence — `var/artifacts/vp1/`.
-Смёржен в `main` через PR #2 (squash) `CodeVinci8/codevinci-atlas`.
+Смёржен в `main` через PR #2 (squash), merge-commit `22951b6`
+`CodeVinci8/codevinci-atlas`.
 
 ## Технические решения VP-2
 
@@ -153,6 +154,14 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   Ember developer-cockpit; TonWave/Sub2API использованы как визуальные референсы
   (иерархия/плотность), без копирования кода/стилей/строк/лейаутов — см.
   `docs/REUSE_REGISTER.md`.
+
+## VP-2 — ЗАВЕРШЁН (20/20), СМЁРЖЕН
+
+Приёмка `scripts/run_vp2_acceptance.py`: 20/20 PASS против реально развёрнутого
+стека (Compose Core/Web + systemd Runner) и синтетических git-фикстур. Evidence
+— `var/artifacts/vp2/`. Смёржен в `main` через PR #3 (squash), merge-commit
+`a14472a` `CodeVinci8/codevinci-atlas`. Живая БД — на миграции
+`0002_project_workspace`.
 
 ## Требуют отдельного подтверждения владельца
 
