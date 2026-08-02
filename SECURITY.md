@@ -28,6 +28,13 @@ symlink-escape, утечка секретов, confused deputy, устаревш
   запрет секретов в запросе, отказ от root по умолчанию.
 - **Один writer** на worktree; после потери heartbeat — reconciliation.
 - **Честная ёмкость** UNKNOWN — без фиктивных значений.
+- **Product Map (VP-3): данные — не команды.** Intake/ссылки/факты — owner-данные
+  (§30.2): текст redacted и bounded по длине, ссылки хранятся как санированные
+  метаданные, VP-3 не ходит по внешним URL и не делает model/provider-вызовов.
+  Двойная защита: секрет во вводе редактируется, а канареечный маркер отклоняется
+  (`INTAKE_INVALID`) — в БД/экспорт не попадает. `VERIFIED` требует resolvable
+  evidence + совпадения hash; approval не создаёт `VERIFIED` из гипотезы. Экспорт
+  MD/JSON без credentials/env-дампов/raw auth-путей/небезопасного HTML.
 
 ## Cookie-гейт (§30.3)
 

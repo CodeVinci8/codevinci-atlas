@@ -28,6 +28,14 @@ writers, lifecycle scripts, exposed panel.
   request rejected, refuses root by default.
 - **One writer** per worktree; heartbeat loss requires reconciliation.
 - **Honest capacity** UNKNOWN — no fabricated numbers.
+- **Product Map (VP-3): data is not commands.** Intake/links/facts are owner
+  data (§30.2): text is redacted and length-bounded, links are stored as
+  sanitized metadata, VP-3 never fetches external URLs and makes no
+  model/provider calls. Double guard: a secret in the input is redacted, and the
+  canary marker is rejected (`INTAKE_INVALID`) — it never reaches DB/export.
+  `VERIFIED` requires resolvable evidence + hash match; approval never turns a
+  hypothesis into `VERIFIED`. MD/JSON export carries no credentials, environment
+  dumps, raw auth paths, or unsafe HTML.
 
 ## Cookie gate (§30.3)
 
