@@ -1,8 +1,8 @@
 # VP-3 — Product Map (исполнимый спек)
 
-**Статус:** реализован; закрывается через приёмку и PR (не merged, пока это не так).
+**Статус:** ЗАВЕРШЁН — 26/26 PASS, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §36 (при конфликте — §1).
-**Ветка:** `atlas/vp-3-product-map`.
+**Ветка:** `atlas/vp-3-product-map` · **PR:** #4 (squash) · **merge:** `07ed6f4`.
 
 ## Result и Definition of Done
 

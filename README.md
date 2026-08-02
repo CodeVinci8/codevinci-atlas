@@ -22,12 +22,14 @@ versioned-памятью вместо бесконечного чата.
 - **VP-2 — Project Workspace: ЗАВЕРШЁН (20/20 PASS)** — подключение проектов
   (local Git / GitHub / архив / пустой), read-only git baseline, безопасные
   worktree и writer-аренды, Project Overview (Ember RU/EN).
+- **VP-3 — Product Map: ЗАВЕРШЁН (26/26 PASS)** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)) —
+  структурный intake, truth-status, версии Brief и решения, Project/Portfolio Map,
+  diff версий, scope-envelope, parking lot и экспорт accepted-состояния в
+  Markdown/JSON. Каждый факт несёт явный truth-status; `VERIFIED` требует
+  проверяемого evidence.
 
-Текущий этап — **VP-3: Product Map** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)):
-структурный intake, truth-status, версии Brief и решения, Project/Portfolio Map,
-diff версий, scope-envelope, parking lot и экспорт accepted-состояния в
-Markdown/JSON. Каждый факт несёт явный truth-status; `VERIFIED` требует
-проверяемого evidence.
+Активного VP нет. Следующий этап — **VP-4: Work Orders & Context**
+(Master Spec §37) — **не начат** и стартует по отдельному решению владельца.
 
 ## Быстрый старт
 

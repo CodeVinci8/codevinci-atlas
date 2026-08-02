@@ -208,13 +208,13 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   собственный Ember (Portfolio/Map/Brief/решения/parking/diff/экспорт), без
   копирования TonWave/Sub2API.
 
-## VP-3 — доставляется через PR (не merged, пока это не так)
+## VP-3 — ЗАВЕРШЁН (26/26), СМЁРЖЕН
 
 Приёмка `scripts/run_vp3_acceptance.py`: 26/26 PASS против реально
 развёрнутого стека (Compose Core/Web + systemd Runner) и синтетических
 фикстур. Evidence — `var/artifacts/vp3/`. Живая БД мигрирована на
-`0003_product_map`; backup снят до миграции. Доставляется через PR из
-`atlas/vp-3-product-map`; merge-commit фиксируется после merge.
+`0003_product_map`; backup снят до миграции. Смёржен в `main` через PR #4
+(squash), merge-commit `07ed6f4` `CodeVinci8/codevinci-atlas`.
 
 ## Требуют отдельного подтверждения владельца
 

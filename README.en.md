@@ -23,12 +23,14 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
 - **VP-2 — Project Workspace: COMPLETE (20/20 PASS)** — project connect (local
   Git / GitHub / archive / empty), read-only git baseline, safe worktrees and
   writer leases, Project Overview (Ember RU/EN).
+- **VP-3 — Product Map: COMPLETE (26/26 PASS)** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)) —
+  structured intake, truth status, Brief versions and decisions, Project/Portfolio
+  Map, version diff, scope envelope, parking lot, and export of the accepted state
+  to Markdown/JSON. Every fact carries an explicit truth status; `VERIFIED`
+  requires resolvable evidence.
 
-Current stage — **VP-3: Product Map** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)):
-structured intake, truth status, Brief versions and decisions, Project/Portfolio
-Map, version diff, scope envelope, parking lot, and export of the accepted state
-to Markdown/JSON. Every fact carries an explicit truth status; `VERIFIED`
-requires resolvable evidence.
+No VP is currently active. Next stage — **VP-4: Work Orders & Context**
+(Master Spec §37) — **not started**; it begins only by separate owner decision.
 
 ## Quick start
 
