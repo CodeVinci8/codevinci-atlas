@@ -37,7 +37,8 @@ class RealClaudeAdapter:
 
     def discover_capabilities(self) -> list[SessionCapability]:
         return [SessionCapability.NEW_SESSION, SessionCapability.RESUME_BY_ID,
-                SessionCapability.FRESH_WITH_HANDOFF, SessionCapability.COMPACT]
+                SessionCapability.FRESH_WITH_HANDOFF, SessionCapability.FORK_NATIVE,
+                SessionCapability.COMPACT]
 
     def _resolve_exe(self, executable: str | None) -> str | None:
         return executable or shutil.which(self.executable)
@@ -68,23 +69,46 @@ class RealClaudeAdapter:
         return argv
 
     def build_resume_argv(self, session_id: str, job: JobPackage, executable: str | None = None) -> list[str]:
+        """EXACT_RESUME (§12.3): продолжить ТУ ЖЕ совместимую сессию по её ID.
+
+        Требует того же профиля (``CLAUDE_CONFIG_DIR``), где эта сессия создана.
+        """
         exe = executable or self.executable
         return [exe, "-p", "--resume", session_id, "--output-format", "stream-json",
                 "--verbose", self._render_prompt(job)]
 
-    def build_fresh_argv(self, job: JobPackage, *, origin_session_id: str | None = None,
-                         executable: str | None = None) -> list[str]:
-        """FRESH_WITH_HANDOFF (§12.3): новая сессия из принятого HandoffPackage.
+    def build_fork_argv(self, origin_session_id: str, job: JobPackage,
+                        executable: str | None = None) -> list[str]:
+        """FORK_SESSION (§12.3, optional): новый session-id, КОПИРУЮЩИЙ историю
+        оригинала (``--resume <id> --fork-session``).
 
-        При наличии origin-сессии — ``--fork-session`` (новый session-id из
-        оригинала, безопасный ack handoff); иначе — свежий запуск с новым
-        ``--session-id``. Prompt несёт компактный handoff-контекст (не старый чат).
+        ВНИМАНИЕ: это НЕ fresh-session. Форк несёт прежний provider-контекст,
+        поэтому допустим ТОЛЬКО в пределах того же профиля и при явном намерении
+        сохранить историю. Для смены профиля использовать build_fresh_argv.
         """
         exe = executable or self.executable
-        if origin_session_id:
-            return [exe, "-p", "--resume", origin_session_id, "--fork-session",
-                    "--output-format", "stream-json", "--verbose", self._render_prompt(job)]
-        return self.build_start_argv(job, exe)
+        return [exe, "-p", "--resume", origin_session_id, "--fork-session",
+                "--output-format", "stream-json", "--verbose", self._render_prompt(job)]
+
+    def build_fresh_argv(self, job: JobPackage, *, new_session_id: str | None = None,
+                         executable: str | None = None) -> list[str]:
+        """FRESH_WITH_HANDOFF (§12.3): ГЕНУИННО новая сессия БЕЗ прежней истории.
+
+        Никакого ``--resume``/``--fork-session``: контекст берётся только из
+        принятого HandoffPackage (компактный prompt) + ack. Это единственный
+        безопасный вариант при смене профиля (origin-сессия недоступна из чужого
+        ``CLAUDE_CONFIG_DIR``). Опционально фиксируем детерминированный
+        ``--session-id`` для нового запуска.
+        """
+        exe = executable or self.executable
+        argv = [exe, "-p", "--output-format", "stream-json", "--verbose"]
+        model = job.inputs.get("model")
+        if model:
+            argv += ["--model", model]
+        if new_session_id:
+            argv += ["--session-id", new_session_id]
+        argv += [self._render_prompt(job)]
+        return argv
 
     def _render_prompt(self, job: JobPackage) -> str:
         return job.goal

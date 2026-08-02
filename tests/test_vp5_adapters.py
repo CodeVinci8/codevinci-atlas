@@ -95,17 +95,31 @@ class TestArgvConstruction(AtlasTestCase):
         self.assertIn("--verbose", argv)
         self.assertEqual(argv[-1], "сделать X безопасно")
 
-    def test_claude_fresh_with_handoff_uses_fork_session(self):
-        argv = RealClaudeAdapter().build_fresh_argv(_job("builder", "claude"),
-                                                    origin_session_id="OLD-SID", executable="claude")
-        self.assertIn("--resume", argv)
-        self.assertIn("OLD-SID", argv)
-        self.assertIn("--fork-session", argv)  # новый session-id из оригинала
+    def test_claude_three_session_semantics_are_distinct(self):
+        a = RealClaudeAdapter()
+        job = _job("builder", "claude")
+        # EXACT_RESUME: --resume SID, без --fork-session.
+        resume = a.build_resume_argv("SID-EX", job, "claude")
+        self.assertIn("--resume", resume)
+        self.assertIn("SID-EX", resume)
+        self.assertNotIn("--fork-session", resume)
+        # FORK_SESSION: --resume origin + --fork-session (копирует историю, тот же профиль).
+        fork = a.build_fork_argv("OLD-SID", job, "claude")
+        self.assertIn("--resume", fork)
+        self.assertIn("OLD-SID", fork)
+        self.assertIn("--fork-session", fork)
+        # FRESH_WITH_HANDOFF: НЕТ ни --resume, ни --fork-session (genuinely fresh).
+        fresh = a.build_fresh_argv(job, executable="claude")
+        self.assertNotIn("--resume", fresh)
+        self.assertNotIn("--fork-session", fresh)
+        self.assertIn("-p", fresh)
 
-    def test_claude_fresh_without_origin_is_new_start(self):
-        argv = RealClaudeAdapter().build_fresh_argv(_job("builder", "claude"), executable="claude")
+    def test_claude_fresh_optional_new_session_id(self):
+        argv = RealClaudeAdapter().build_fresh_argv(
+            _job("builder", "claude"), new_session_id="NEW-UUID", executable="claude")
+        self.assertIn("--session-id", argv)
+        self.assertIn("NEW-UUID", argv)
         self.assertNotIn("--fork-session", argv)
-        self.assertIn("-p", argv)
 
 
 if __name__ == "__main__":

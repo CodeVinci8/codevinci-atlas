@@ -123,24 +123,30 @@ def _db_migration() -> str | None:
 
 
 def _run_counts() -> dict:
-    with session_scope() as s:
-        rows = s.execute(select(Run.state, func.count()).group_by(Run.state)).all()
-    by = {state: int(n) for state, n in rows}
-    return {
-        "active": sum(by.get(x, 0) for x in ("PREPARING", "RUNNING", "COLLECTING")),
-        "queued": by.get("QUEUED", 0),
-        "paused": by.get("PAUSED", 0),
-        "owner_required": by.get("OWNER_REQUIRED", 0),
-    }
+    # Робастно к БД без VP-5 таблиц (напр. до применения 0005): partial, не фикция.
+    try:
+        with session_scope() as s:
+            rows = s.execute(select(Run.state, func.count()).group_by(Run.state)).all()
+        by = {state: int(n) for state, n in rows}
+        return {
+            "active": sum(by.get(x, 0) for x in ("PREPARING", "RUNNING", "COLLECTING")),
+            "queued": by.get("QUEUED", 0),
+            "paused": by.get("PAUSED", 0),
+            "owner_required": by.get("OWNER_REQUIRED", 0),
+        }
+    except Exception:  # noqa: BLE001 — таблицы ещё нет
+        return {"active": None, "queued": None, "paused": None, "owner_required": None}
 
 
 def _lease_counts() -> dict:
-    with session_scope() as s:
-        writers = int(s.execute(select(func.count()).select_from(WorktreeLease)
-                                .where(WorktreeLease.released_at == "")).scalar_one())
-        profiles = int(s.execute(select(func.count()).select_from(RunLease)
-                                 .where(RunLease.released_at == "")).scalar_one())
-    return {"worktree_writers": writers, "profile_leases": profiles}
+    def _count(model) -> int | None:
+        try:
+            with session_scope() as s:
+                return int(s.execute(select(func.count()).select_from(model)
+                                     .where(model.released_at == "")).scalar_one())
+        except Exception:  # noqa: BLE001 — таблицы ещё нет
+            return None
+    return {"worktree_writers": _count(WorktreeLease), "profile_leases": _count(RunLease)}
 
 
 def _runner(settings) -> dict:

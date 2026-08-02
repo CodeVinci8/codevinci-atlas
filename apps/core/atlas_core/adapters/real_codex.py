@@ -82,8 +82,10 @@ class RealCodexAdapter:
         return argv
 
     def build_fresh_argv(self, job: JobPackage, executable: str | None = None) -> list[str]:
-        """FRESH_WITH_HANDOFF (§12.3): для Codex свежая сессия — это новый
-        ``codex exec`` с компактным handoff-контекстом в prompt (не resume)."""
+        """FRESH_WITH_HANDOFF (§12.3): для Codex genuinely fresh сессия — это новый
+        ``codex exec`` БЕЗ ``resume``; прежней истории нет, контекст только из
+        компактного HandoffPackage в prompt. (EXACT_RESUME — build_resume_argv;
+        отдельного history-fork в контракте codex exec нет.)"""
         return self.build_start_argv(job, executable or self._resolve_exe(executable))
 
     def _render_prompt(self, job: JobPackage) -> str:

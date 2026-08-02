@@ -173,13 +173,21 @@ head (сохранение VP-0…VP-4); durability после рестарта;
 **Общее:** не читать `auth.json`/session-JSONL как стабильный API; transcript —
 только через публичный CLI-интерфейс; version фиксируется.
 
-## Session rules
+## Session rules (три РАЗЛИЧНЫЕ семантики)
 
 - `NEW_SESSION` (required): fresh `codex exec` / `claude -p`.
-- `RESUME_BY_ID` (required): точная сессия при совместимости.
-- `FRESH_WITH_HANDOFF` (required): при небезопасном resume — новая сессия из
-  принятого HandoffPackage (VP-4) с handoff-ack; для Claude `--fork-session`.
-- `COMPACT`/`FORK_NATIVE` — optional; `CLEAR_INTERACTIVE` — operator-only.
+- `EXACT_RESUME` / `RESUME_BY_ID` (required): продолжить **ту же** совместимую
+  сессию по её ID (`codex exec resume <id>` / `claude -p --resume <id>`). Только
+  в пределах того же профиля (сессия живёт в его `CODEX_HOME`/`CLAUDE_CONFIG_DIR`).
+- `FRESH_WITH_HANDOFF` (required): **genuinely fresh** сессия БЕЗ прежней истории
+  — контекст только из принятого HandoffPackage (VP-4) + ack. Никакого
+  `--resume`/`--fork-session`. Единственный безопасный вариант при **смене
+  профиля** (origin-сессия недоступна из чужого auth-root).
+- `FORK_SESSION` / `FORK_NATIVE` (optional): новый session-id, **копирующий**
+  историю оригинала (`claude --resume <id> --fork-session`). Несёт прежний
+  provider-контекст → допустим ТОЛЬКО в пределах того же профиля и при явном
+  намерении. **Не** путать с fresh-from-handoff.
+- `COMPACT` — optional; `CLEAR_INTERACTIVE` — operator-only.
 
 ## Lease и one-writer (§13.4)
 
