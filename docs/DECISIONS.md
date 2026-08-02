@@ -330,6 +330,67 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   повторный прогон прошёл). Реальный и детерминированный уровни — раздельные
   evidence.
 
+## VP-6 — Review & Quality (решения)
+
+- **VP6-D0 (owner-авторизация текущей сессии).** Владелец в текущей сессии
+  авторизовал ограниченную последовательность закрытия VP-6: локальную
+  реализацию, тесты, браузерную верификацию, ограниченные обязательные
+  provider-вызовы (≤4), push feature-ветки, русский PR, починку CI, squash-merge,
+  обновление приватного loopback-стека с verified backup/миграцией и пост-merge
+  синхронизацию docs. **Не** входит: выбор LICENSE/NOTICE, cookies, мутация
+  login, публичный deploy, домен/TLS, force push, destructive cleanup, удаление
+  owner-данных, реализация VP-7/8/9, посторонние изменения VPS/репозиториев.
+- **VP6-D1 (браузер: Playwright chromium из официального источника).** На хосте
+  (Ubuntu, suite `resolute`) браузер отсутствовал: ни `google-chrome*`, ни
+  `chromium*` на PATH; `apt-cache policy chromium` пуст (в Ubuntu `chromium` —
+  транзитный snap, ненадёжный headless на сервере). Единственные chrome-бинарники
+  в системе — внутри образов чужих контейнеров (`/var/lib/docker/.../ms-playwright`)
+  и **не** трогаются. Репозиторий — pnpm/Vite/React/Node, поэтому сильнейший
+  repo-совместимый harness — **Playwright** с его официальной загрузкой chromium
+  (`npx playwright install chromium`, официальный источник Playwright, **не**
+  curl-pipe). Установлен `chromium-1234` (Chromium **151.0.7922.34**),
+  подтверждён реальный headless-запуск против `127.0.0.1:3210`. Диск после
+  установки — 85% (warning-полоса, не critical).
+- **VP6-D2 (root-cause пустых Profiles).** `/api/v1/profiles` пуст, потому что
+  `scripts/profile-init.py` писал только non-secret **файловый** реестр
+  (`ProfileRegistry` JSON, 4 профиля присутствуют), а API читает durable-таблицу
+  `agent_profiles` (жив.БД: 0 строк). `ProfileService.upsert_profile` (путь в БД)
+  вызывался **только** `run_vp5_acceptance.py`. Нет шага, синхронизирующего
+  реестр → БД при setup/startup/deploy. Исправление — идемпотентная
+  reconciliation (`atlas_core/profile_reconcile.py` + CLI `atlas profiles
+  reconcile`), читающая allowlisted реестр и upsert-ящая safe-метаданные; **не**
+  стартует provider-сессии, **не** читает credential-файлы, **не** сканирует
+  произвольные Unix-home. Capacity остаётся `UNKNOWN`/`STALE` до verified
+  observation; остаток не выводится из факта успешной auth.
+- **VP6-D3 (bounded Ember/UX correction — не VP-8).** По прямому указанию
+  владельца до приёмки VP-6 выполняется ограниченная коррекция долга UI: Pulse-
+  иерархия (above-fold state/VP/Run/handoff/blocker/next; диагностика
+  раскрываемая), подпись load average `Нагрузка за 1 / 5 / 15 мин` (не «CPU %»),
+  memory/disk бары с текстовыми порогами, перенос backend `Web: UNKNOWN` в
+  диагностику при правдивом `Интерфейс открыт`, locale-aware время через
+  `Intl.DateTimeFormat` с сохранением UTC в `<time datetime>`, human-labels и
+  фильтры Audit, компактные empty states, сдержанный Ember-refinement (glow
+  только вокруг активного, `prefers-reduced-motion`). Полный операционный console
+  (4→40 профилей, saved views, bulk) остаётся **VP-8**.
+- **VP6-D4 (ReviewPackage — SHA-bound, инвалидация фактом).** ReviewPackage
+  immutable, `content_hash` = sha256 над canonical-JSON. Валидность проверяется
+  **сверкой с фактом** (Git/FS/DB), а не доверием отчёту: протухший base/head SHA,
+  изменённый артефакт (хеш), отсутствующее/неразрешимое evidence или несовпадающий
+  Work Order → `INVALID_EVIDENCE`. Cached PASS с протухшего head не используется.
+- **VP6-D5 (Impact engine — точные классы, без слепой полной регрессии).**
+  Классы `DOC_ONLY/LOCAL/INTEGRATION/SHARED/HIGH_RISK` детерминированы по diff;
+  micro-fix не запускает полную регрессию без видимого risk-повода. Финальная
+  полная Python-регрессия оправдана HIGH_RISK-диффом (миграция `0006` + policy).
+- **VP6-D6 (Evidence Cache — точный ключ).** Ключ = SHA + команда/версия +
+  input-хеши + окружение + scope; reuse только при точном совпадении всех
+  компонентов с видимой причиной; любое изменение инвалидирует запись.
+- **VP6-D7 (waiver — non-waivable).** Waiver требует reason/finding/scope/actor/
+  expiry/review-condition/Audit; **не** может обойти secrets/credential exposure,
+  unauthorized external actions, one-writer violation, stale evidence.
+- **VP6-D8 (LICENSE остаётся видимым owner-решением).** Firewall-gate
+  `license_dependency` эмитит видимый owner/info finding об отсутствии Atlas
+  LICENSE. LICENSE **не** добавляется (VP-6 не выбирает лицензию).
+
 ## Требуют отдельного подтверждения владельца
 
 - Выбор LICENSE (кандидаты MIT/Apache-2.0; выбирается после reuse-аудита, §20.4).
