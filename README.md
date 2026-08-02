@@ -35,17 +35,21 @@ versioned-памятью вместо бесконечного чата.
   bounded immutable JobPackage, Context Governor с durable-checkpoint и handoff,
   а также **свежий изолированный потребитель**, который восстанавливает
   состояние только из HandoffPackage. Смёржен через PR #6 (squash `7a3f82d`,
-  CI head `280ee35`); живая БД — на `0004_work_orders`.
+  CI head `280ee35`; миграция `0004_work_orders`).
 
-**VP-5 — Agent Pipeline (Master Spec §38, §17): АКТИВЕН, локально реализован**
-([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — конвейер Codex Planner → Claude Builder →
-независимый Codex Reviewer: durable Runs (жизненный цикл, идемпотентность,
-optimistic-concurrency), router без silent fallback, один writer (worktree +
-profile lease), три раздельные session-семантики (EXACT_RESUME/FORK_SESSION/
-FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption-recovery, Profiles MVP,
-full-width Pulse, RU/EN. Детерминированная приёмка `run_vp5_acceptance.py` —
-**26/26** (реальная миграция `0005`, реальные сервисы, fake-адаптеры). **Реальный
-provider-E2E — pending** до owner-авторизации; PR/merge ещё нет.
+- **VP-5 — Agent Pipeline: ЗАВЕРШЁН (26/26 PASS + реальный E2E)**
+  ([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — конвейер Codex Planner → Claude Builder →
+  независимый Codex Reviewer: durable Runs (жизненный цикл, идемпотентность,
+  optimistic-concurrency), router без silent fallback, один writer (worktree +
+  profile lease), три раздельные session-семантики (EXACT_RESUME/FORK_SESSION/
+  FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption-recovery, Profiles MVP,
+  full-width Pulse, RU/EN. Детерминированная приёмка `run_vp5_acceptance.py` —
+  **26/26**; реальный provider-E2E `run_vp5_real_e2e.py` — реальный артефакт
+  (3/6 подписочных вызовов, PASS). Смёржен через **PR #9** (squash `afefa61`,
+  CI head `86c504e`); живая БД — на `0005_agent_pipeline`.
+
+Активного VP нет. Следующий этап — **VP-6: Review & Quality** (Master Spec §39) —
+**не начат** и стартует по отдельному решению владельца.
 
 ## Быстрый старт
 

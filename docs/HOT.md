@@ -16,16 +16,20 @@
   реконструкция внутри Core-образа, ротация с одним writer, compact-fallback,
   Work Orders UI RU/EN; merged PR #6 squash `7a3f82d`, CI head `280ee35`; живая
   БД на `0004_work_orders`).
-- **VP-5 — Agent Pipeline: АКТИВЕН, локально реализован** (ветка
-  `atlas/vp-5-agent-pipeline`, не запушена). Миграция `0005_agent_pipeline`
-  (16 таблиц), router без silent fallback, RunService (lifecycle/idempotency/
-  optimistic), one-writer (worktree+profile lease), PipelineService
+- **VP-5 — Agent Pipeline: ЗАВЕРШЁН — 26/26 + реальный E2E** (merged PR #9,
+  squash `afefa61`, CI head `86c504e`; живая БД на `0005_agent_pipeline`).
+  Миграция 0005 (16 таблиц), router без silent fallback, RunService (lifecycle/
+  idempotency/optimistic), one-writer (worktree+profile lease), PipelineService
   (Planner→Builder→независимый Reviewer, fix-loop, rate-limit/auth/interruption),
   адаптеры (3 session-семантики: EXACT_RESUME/FORK_SESSION/FRESH_WITH_HANDOFF),
   API /runs·/profiles·/models·/system/summary, Web (Runs/Profiles/Pulse/RU-EN
-  segmented). Приёмка `run_vp5_acceptance.py` **26/26**; полная Python-регрессия
-  **243 OK**; Web tsc+build+i18n 452/452 ✓. **Реальный provider-E2E pending**
-  (owner-gate). Пуша/PR нет.
+  segmented). Детерминированная приёмка **26/26**; полная Python-регрессия
+  **247 OK**; Web tsc+build+i18n 452/452, bundle-verify 28/28. Реальный
+  provider-E2E: Codex Planner (codex-plus-01) → Claude Builder (claude-pro-01,
+  артефакт calc.py) → независимый Codex Reviewer (codex-plus-02) → PASS, 3/6
+  вызовов.
+- **Активного VP нет.** Следующий гейт — VP-6 (Review & Quality, §39), **не
+  начат** (отдельное решение владельца).
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
   Runner READY.
 - **Профили:** 4 реальных, авторизованы; per-profile идентичности
@@ -38,7 +42,8 @@
   root `0700` во владении своей идентичности; Runner дропает привилегии.
   Сервисный `atlas` не читает credentials.
 - **Репозиторий:** `CodeVinci8/codevinci-atlas`, public. VP-0 (PR #1), VP-1
-  (PR #2), VP-2 (PR #3), VP-3 (PR #4) и VP-4 (PR #6) **смёржены** в `main`.
+  (PR #2), VP-2 (PR #3), VP-3 (PR #4), VP-4 (PR #6) и **VP-5 (PR #9, squash
+  `afefa61`)** **смёржены** в `main`. Живая БД — на `0005_agent_pipeline`.
 - **Git-идентичность:** имя `CodeVinci`, email в `git config` (задан).
 - **Главные правила:** один writer, credentials не копируются, секреты не в
   durable-состоянии, capacity честно UNKNOWN.

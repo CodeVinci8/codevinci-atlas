@@ -1,12 +1,13 @@
 # VP-5 — Agent Pipeline (исполнимый спек)
 
-**Статус:** В РАБОТЕ — активный гейт (WIP=1). Не завершён.
+**Статус:** ЗАВЕРШЁН — 26/26 PASS + реальный provider-E2E, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §38 (VP-5) и §17
 (Agent Pipeline), связанные §11 (Profiles), §12 (Agent Adapter), §13 (Runner),
 §15 (Durable state), §16 (Work Orders/JobPackage/HandoffPackage), §18 (Review),
 §25 (API/events), §27 (Layout), §28 (Ember), §29 (RU/EN/a11y), §30 (Security),
 §31 (Observability/recovery), §44 (Report).
-**Ветка:** `atlas/vp-5-agent-pipeline` · **PR/CI/merge:** заполняются при доставке.
+**Ветка:** `atlas/vp-5-agent-pipeline` · **PR:** #9 (squash) · **CI head:**
+`86c504e` · **merge:** `afefa61`. Живая БД — на `0005_agent_pipeline`.
 
 ## Result и Definition of Done
 

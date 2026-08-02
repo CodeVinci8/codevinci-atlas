@@ -36,17 +36,21 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
   (READY/MERGE/SPLIT/OWNER_REQUIRED/SWITCH_PROFILE), bounded immutable JobPackage,
   Context Governor with durable checkpoints and handoff, and a **fresh isolated
   consumer** that reconstructs state from the HandoffPackage alone. Merged via
-  PR #6 (squash `7a3f82d`, CI head `280ee35`); live DB on `0004_work_orders`.
+  PR #6 (squash `7a3f82d`, CI head `280ee35`; migration `0004_work_orders`).
 
-**VP-5 — Agent Pipeline (Master Spec §38, §17): ACTIVE, implemented locally**
-([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — the Codex Planner → Claude Builder →
-independent Codex Reviewer pipeline: durable Runs (lifecycle, idempotency,
-optimistic concurrency), router with no silent fallback, one writer (worktree +
-profile lease), three distinct session semantics (EXACT_RESUME / FORK_SESSION /
-FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption recovery, Profiles MVP,
-full-width Pulse, RU/EN. Deterministic acceptance `run_vp5_acceptance.py` —
-**26/26** (real `0005` migration, real services, fake adapters). **Real provider
-E2E is pending** owner authorization; no PR/merge yet.
+- **VP-5 — Agent Pipeline: COMPLETE (26/26 PASS + real E2E)**
+  ([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — the Codex Planner → Claude Builder →
+  independent Codex Reviewer pipeline: durable Runs (lifecycle, idempotency,
+  optimistic concurrency), router with no silent fallback, one writer (worktree +
+  profile lease), three distinct session semantics (EXACT_RESUME / FORK_SESSION /
+  FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption recovery, Profiles MVP,
+  full-width Pulse, RU/EN. Deterministic acceptance `run_vp5_acceptance.py` —
+  **26/26**; real provider E2E `run_vp5_real_e2e.py` — real artifact (3/6
+  subscription calls, PASS). Merged via **PR #9** (squash `afefa61`, CI head
+  `86c504e`); live DB on `0005_agent_pipeline`.
+
+No VP is currently active. Next stage — **VP-6: Review & Quality** (Master Spec
+§39) — is **not started**; it begins only by separate owner decision.
 
 ## Quick start
 
