@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/work-order.json",
+  "title": "WorkOrderContent",
+  "description": "Executable Work Order (Master Spec §16.1, §37). Обязательные поля §16.1 + acceptance_criteria с устойчивыми ID. Без секретов.",
+  "type": "object",
+  "required": ["role", "goal", "source_of_truth", "baseline", "scope", "out_of_scope",
+               "inputs", "acceptance_criteria", "required_checks", "test_impact",
+               "capabilities", "prohibited_actions", "stop_conditions", "report_schema"],
+  "properties": {
+    "role": {"type": "string", "enum": ["builder", "planner", "reviewer"]},
+    "goal": {"type": "string"},
+    "source_of_truth": {"type": "array", "items": {"type": "string"}},
+    "baseline": {
+      "type": "object",
+      "required": ["branch", "head"],
+      "properties": {"branch": {"type": "string"}, "head": {"type": "string"}}
+    },
+    "scope": {
+      "type": "object",
+      "properties": {"files": {"type": "array"}, "components": {"type": "array"}}
+    },
+    "out_of_scope": {"type": "array"},
+    "inputs": {"type": "array"},
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "required"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "required": {"type": "boolean"},
+          "shared": {"type": "boolean"},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "required_checks": {"type": "array"},
+    "test_impact": {"type": "array"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "prohibited_actions": {"type": "array", "items": {"type": "string"}},
+    "stop_conditions": {"type": "array", "items": {"type": "string"}},
+    "immutable_constraints": {"type": "array"},
+    "report_schema": {"type": "string", "enum": ["contracts/schemas/run-result.json"]},
+    "exact_next_action": {"type": "string"}
+  }
+}

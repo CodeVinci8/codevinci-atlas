@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codevinci.dev/atlas/schemas/job-package.json",
+  "title": "JobPackageContent",
+  "description": "Immutable JobPackage — только релевантный контекст (Master Spec §16.3). Без repo-дампа, полного чата, credentials, env-дампа.",
+  "type": "object",
+  "required": ["schema_version", "ids", "hashes", "goal", "source_of_truth",
+               "baseline", "scope", "out_of_scope", "acceptance_criteria",
+               "required_checks", "capabilities", "prohibited_actions",
+               "stop_conditions", "capacity", "exact_next_action"],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "ids": {
+      "type": "object",
+      "required": ["project_id", "work_order_id", "vp_spec_id"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "work_order_id": {"type": "string"},
+        "vp_spec_id": {"type": "string"},
+        "vp_key": {"type": "string"},
+        "approval_id": {"type": "string"}
+      }
+    },
+    "hashes": {"type": "object"},
+    "goal": {"type": "string"},
+    "finished_result": {"type": "string"},
+    "definition_of_done": {"type": "array"},
+    "source_of_truth": {"type": "array", "items": {"type": "string"}},
+    "baseline": {"type": "object"},
+    "instruction_refs": {"type": "array"},
+    "scope": {"type": "object"},
+    "out_of_scope": {"type": "array"},
+    "inputs": {"type": "array"},
+    "acceptance_criteria": {"type": "array"},
+    "required_checks": {"type": "array"},
+    "test_impact": {"type": "array"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "prohibited_actions": {"type": "array", "items": {"type": "string"}},
+    "stop_conditions": {"type": "array"},
+    "immutable_constraints": {"type": "array"},
+    "artifact_refs": {"type": "array"},
+    "capacity": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {"status": {"type": "string",
+        "enum": ["AVAILABLE", "LOW", "EXHAUSTED", "UNKNOWN"]}}
+    },
+    "exact_next_action": {"type": "string"}
+  }
+}
