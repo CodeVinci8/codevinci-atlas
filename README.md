@@ -13,42 +13,53 @@ versioned-памятью вместо бесконечного чата.
 
 ## Статус
 
-Активная разработка по этапам **VP-0…VP-9**. **VP-0: Profile Pool & Live
-Handoff Proof — ЗАВЕРШЁН (11/11 PASS)**, включая реальные A→B для Codex и
-Claude. Текущий этап — **VP-1: Foundation**.
+Активная разработка по этапам **VP-0…VP-9**. Завершено и смёржено в `main`:
 
-Доказано реально в VP-0:
+- **VP-0 — Profile Pool & Live Handoff Proof: ЗАВЕРШЁН (11/11 PASS)** — реальные
+  A→B для Codex и Claude, изоляция 4 профилей, один writer, честная ёмкость `UNKNOWN`.
+- **VP-1 — Foundation: ЗАВЕРШЁН (17/17 PASS)** — Compose Core/Web + systemd
+  Runner, health/миграции/audit, CLI `doctor/status/backup`, RU/EN Web-shell, CI.
+- **VP-2 — Project Workspace: ЗАВЕРШЁН (20/20 PASS)** — подключение проектов
+  (local Git / GitHub / архив / пустой), read-only git baseline, безопасные
+  worktree и writer-аренды, Project Overview (Ember RU/EN).
 
-- изоляция **2 Codex + 2 Claude** профилей через отдельные Unix-идентичности и
-  исполняемые файлы (процесс профиля A не читает credentials B; `atlas` — ни один);
-- **реальный A→B**: профиль A даёт структурный результат, Atlas сохраняет и
-  верифицирует HandoffPackage против БД, профиль B (другой аккаунт, отдельная
-  сессия) продолжает и завершает — независимо проверяемо, для обоих провайдеров;
-- **один writer**; обрыв Runner → reconciliation → продолжение до одного успеха;
-- восстановление после рестарта Core; смена профиля при **rate limit** без
-  второго writer;
-- отсутствие секретов в дереве/истории Git/БД/логах/artifacts;
-- честная ёмкость **UNKNOWN**.
+Текущий этап — **VP-3: Product Map** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)):
+структурный intake, truth-status, версии Brief и решения, Project/Portfolio Map,
+diff версий, scope-envelope, parking lot и экспорт accepted-состояния в
+Markdown/JSON. Каждый факт несёт явный truth-status; `VERIFIED` требует
+проверяемого evidence.
 
-## Быстрый старт (доказательство VP-0)
+## Быстрый старт
 
-Нужен Python 3.12+ (проверено на 3.14); uv/pnpm/Docker для VP-0 не нужны.
-Единый runtime-layout — `/var/lib/codevinci-atlas`.
+Стек Core/Web — в Docker Compose; Runner — нативный systemd-сервис. Единый
+runtime-layout — `/var/lib/codevinci-atlas`. Web слушает только
+`http://127.0.0.1:3210` (loopback).
 
 ```bash
 # runtime-идентичности и каталоги (root, идемпотентно), затем профили
 sudo bash scripts/atlas-runtime-setup.sh
 PYTHONPATH=apps/core python3 scripts/profile-init.py
 
-# Юнит-приёмка
+# systemd Runner (нативный host, UDS)
+sudo cp infra/systemd/codevinci-atlas-runner.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now codevinci-atlas-runner
+
+# Compose Core/Web (UID/GID atlas в .env; миграции применяет entrypoint)
+docker compose up -d --build
+
+# состояние стека и БД
+curl -s http://127.0.0.1:3210/api/v1/health
+
+# приёмки по этапам (root, стек поднят)
+python3 scripts/run_vp1_acceptance.py      # 17/17
+python3 scripts/run_vp2_acceptance.py      # 20/20
+python3 scripts/run_vp3_acceptance.py      # 26/26 (VP-3)
+```
+
+Юнит/интеграционные тесты Core/Runner (без стека):
+
+```bash
 PYTHONPATH=apps/core:apps/runner:tests python3 -m unittest discover -s tests -p 'test_*.py'
-
-# Полная приёмка VP-0 (PASS / PASS_MECHANISM / GATE_REAL) + evidence
-PYTHONPATH=apps/core:apps/runner python3 scripts/run_acceptance.py
-
-# Диагностика профилей без идентичностей + web-status; полный секрет-скан
-PYTHONPATH=apps/core:apps/runner python3 scripts/atlas-doctor --web-status var/status.html
-PYTHONPATH=apps/core python3 scripts/secret_scan.py
 ```
 
 Реальные подписочные profile-probe — за owner-гейтом: `scripts/login-gate.sh`.
@@ -63,7 +74,10 @@ domain socket с request-token. Credentials не монтируются в Web. 
 ## Документация
 
 - [`docs/MASTER_SPEC.md`](docs/MASTER_SPEC.md) — каноническое ТЗ.
-- [`docs/vp/VP-0.md`](docs/vp/VP-0.md) — исполнимый спек VP-0.
+- Исполнимые спеки: [`docs/vp/VP-0.md`](docs/vp/VP-0.md),
+  [`docs/vp/VP-1.md`](docs/vp/VP-1.md), [`docs/vp/VP-2.md`](docs/vp/VP-2.md),
+  [`docs/vp/VP-3.md`](docs/vp/VP-3.md).
+- [`docs/PRODUCT_MAP.md`](docs/PRODUCT_MAP.md) — модель Product Map и API VP-3.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/ADAPTERS.md`](docs/ADAPTERS.md),
   [`docs/INSTALL.md`](docs/INSTALL.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md),
   [`docs/TEST_POLICY.md`](docs/TEST_POLICY.md).

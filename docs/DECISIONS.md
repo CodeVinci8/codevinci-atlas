@@ -118,7 +118,8 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 
 Приёмка `scripts/run_vp1_acceptance.py`: 17/17 PASS против реально развёрнутого
 стека (Compose Core/Web + systemd Runner). Evidence — `var/artifacts/vp1/`.
-Смёржен в `main` через PR #2 (squash) `CodeVinci8/codevinci-atlas`.
+Смёржен в `main` через PR #2 (squash), merge-commit `22951b6`
+`CodeVinci8/codevinci-atlas`.
 
 ## Технические решения VP-2
 
@@ -153,6 +154,67 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   Ember developer-cockpit; TonWave/Sub2API использованы как визуальные референсы
   (иерархия/плотность), без копирования кода/стилей/строк/лейаутов — см.
   `docs/REUSE_REGISTER.md`.
+
+## VP-2 — ЗАВЕРШЁН (20/20), СМЁРЖЕН
+
+Приёмка `scripts/run_vp2_acceptance.py`: 20/20 PASS против реально развёрнутого
+стека (Compose Core/Web + systemd Runner) и синтетических git-фикстур. Evidence
+— `var/artifacts/vp2/`. Смёржен в `main` через PR #3 (squash), merge-commit
+`a14472a` `CodeVinci8/codevinci-atlas`. Живая БД — на миграции
+`0002_project_workspace`.
+
+## Технические решения VP-3
+
+- **VP3-D1 (durable-модель только через Alembic).** Таблицы VP-3 —
+  `product_intakes`, `briefs`, `map_versions`, `map_nodes`, `map_edges`,
+  `decisions`, `decision_events`, `parking_items`, `approvals`,
+  `vp_activations`, `idempotency_keys` — добавлены миграцией
+  `0003_product_map` и ORM-моделями (SQLAlchemy 2.x). Прод-путь — только
+  Alembic (VP1-D1). Апгрейд доказан из пустой БД (`0001→0002→0003`) и из копии
+  живой `0002` без потери данных VP-2 (приёмка #21).
+- **VP3-D2 (immutable-версии + content-hash).** Brief/Map — immutable-версии с
+  монотонным `version`, `parent_id` и `content_hash` = `sha256:` над
+  canonical-JSON (sorted keys). Правка = новая версия; approved-версия не
+  мутируется. Diff — детерминированный field/node/edge-level.
+- **VP3-D3 (truth-status и evidence).** `VERIFIED` требует resolvable evidence
+  (единственный тип VP-3 — VP-2 git baseline: `git_baseline:<id>`/`:latest`) с
+  совпадением `content_hash`; forged/stale/mismatch → `EVIDENCE_INVALID`.
+  Approval **не** превращает гипотезу в VERIFIED. `OWNER_PROVIDED`/`INFERRED`/
+  `HYPOTHESIS`/`STALE`/`UNKNOWN` видимо различимы в API/экспорте/UI. Полная
+  система Evidence — VP-6.
+- **VP3-D4 (Approval-record — источник истины об утверждении).** Утверждённая
+  версия определяется неизменяемой записью `approvals`, а не изменчивым
+  статусом Brief: создание нового черновика поверх принятой версии **не**
+  «разутверждает» её (history не удаляется). Approval связывает Brief+hash,
+  Map version, envelope-hash, decisions-hash, actor, timestamp.
+- **VP3-D5 (concurrency + идемпотентность).** Оптимистичная блокировка через
+  `expected_version` (расхождение → `VERSION_CONFLICT`); `Idempotency-Key` →
+  повтор не создаёт дублей. Один активный VP — durable-инвариант
+  `UNIQUE(project_id, active_slot)`; вторая (в т.ч. конкурентная) активация →
+  `ACTIVE_VP_CONFLICT` (доказано bounded-concurrency, #15). Стабильные коды:
+  `VERSION_CONFLICT/EVIDENCE_INVALID/DECISION_UNRESOLVED/ENVELOPE_INVALID/`
+  `MAP_INVALID/PROJECT_NOT_AVAILABLE/ACTIVE_VP_CONFLICT`.
+- **VP3-D6 (данные — не команды; без внешних вызовов).** Intake/ссылки/факты —
+  данные (§30.2): текст redacted+bounded, ссылки хранятся как санированные
+  метаданные, VP-3 **не** ходит по внешним URL и **не** делает model/provider-
+  вызовов. Секрет во вводе отклоняется/редактируется — в БД не попадает.
+- **VP3-D7 (Portfolio — правдивая проекция).** Portfolio Map не выдумывает
+  прогресс/капасити/последний запуск; отсутствующее — `UNKNOWN`. Экспорт
+  MD/JSON детерминирован для одной принятой версии (кроме `_generated`), без
+  секретов/env-дампов/raw auth-путей/небезопасного HTML.
+- **VP3-D8 (Web: тёмный default сохранён).** Без явного сохранённого выбора
+  ставится `data-theme="dark"` — светлое OS-предпочтение не заменяет
+  утверждённую тёмную тему Atlas. Полная тема/настройки — VP-8. UI —
+  собственный Ember (Portfolio/Map/Brief/решения/parking/diff/экспорт), без
+  копирования TonWave/Sub2API.
+
+## VP-3 — доставляется через PR (не merged, пока это не так)
+
+Приёмка `scripts/run_vp3_acceptance.py`: 26/26 PASS против реально
+развёрнутого стека (Compose Core/Web + systemd Runner) и синтетических
+фикстур. Evidence — `var/artifacts/vp3/`. Живая БД мигрирована на
+`0003_product_map`; backup снят до миграции. Доставляется через PR из
+`atlas/vp-3-product-map`; merge-commit фиксируется после merge.
 
 ## Требуют отдельного подтверждения владельца
 

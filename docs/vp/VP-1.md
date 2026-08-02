@@ -1,8 +1,8 @@
 # VP-1 — Foundation (исполнимый спек)
 
-**Статус:** реализован; закрывается через приёмку и PR.
+**Статус:** ЗАВЕРШЁН — 17/17 PASS, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §34.
-**Ветка:** `atlas/vp-1-foundation`.
+**Ветка:** `atlas/vp-1-foundation` · **PR:** #2 (squash) · **merge:** `22951b6`.
 
 ## Result
 

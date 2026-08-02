@@ -111,6 +111,13 @@ AI-градиенты, избыточное стекло/частицы/пост
 Master Spec (§28), а не сами дашборды. Файлы: `apps/web/src/{App.tsx,styles.css,
 i18n.ts,locales/*}` — написаны нативно, без заимствований кода референсов.
 
+**VP-3 (Product Map UI).** Граница no-copy не меняется: новый surface
+(Portfolio Map, Project Map, Draft Brief, truth-badges, решения, parking, diff,
+экспорт) реализован собственным Ember-кодом. Файлы `apps/web/src/{productmap.tsx,
+App.tsx,api.ts,i18n.ts,locales/*,styles.css}` — нативные; ни кода, ни стилей, ни
+строк, ни ассетов TonWave/Sub2API не заимствовано. Truth-status/решения показаны
+символ+текст+цвет (не только цветом); фейкового прогресса/ёмкости нет.
+
 ## Итог VP-0
 
 Кода из внешних проектов **не адоптировано**. Изоляция профилей, writer-lease,

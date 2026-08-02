@@ -13,36 +13,54 @@ endless chat.
 
 ## Status
 
-Active staged development across **VP-0…VP-9**. **VP-0: Profile Pool & Live
-Handoff Proof — COMPLETE (11/11 PASS)**, including real A→B for both Codex and
-Claude. Current stage — **VP-1: Foundation**.
+Active staged development across **VP-0…VP-9**. Completed and merged into `main`:
 
-Proven for real in VP-0:
+- **VP-0 — Profile Pool & Live Handoff Proof: COMPLETE (11/11 PASS)** — real
+  A→B for Codex and Claude, isolation of 4 profiles, one writer, honest
+  `UNKNOWN` capacity.
+- **VP-1 — Foundation: COMPLETE (17/17 PASS)** — Compose Core/Web + systemd
+  Runner, health/migrations/audit, CLI `doctor/status/backup`, RU/EN web shell, CI.
+- **VP-2 — Project Workspace: COMPLETE (20/20 PASS)** — project connect (local
+  Git / GitHub / archive / empty), read-only git baseline, safe worktrees and
+  writer leases, Project Overview (Ember RU/EN).
 
-- isolation of **2 Codex + 2 Claude** profiles via separate Unix identities and
-  executables (profile A's process cannot read B's credentials; `atlas` reads none);
-- **real A→B**: profile A yields a structured result, Atlas persists and verifies
-  the HandoffPackage against the DB, profile B (different account, separate
-  session) continues and finishes — independently checkable, for both providers;
-- **one writer**; Runner interruption → reconciliation → continuation to one success;
-- recovery after Core restart; rate-limit profile switch without a second writer;
-- no secrets in tree/Git history/DB/logs/artifacts;
-- honest **UNKNOWN** capacity.
+Current stage — **VP-3: Product Map** ([`docs/vp/VP-3.md`](docs/vp/VP-3.md)):
+structured intake, truth status, Brief versions and decisions, Project/Portfolio
+Map, version diff, scope envelope, parking lot, and export of the accepted state
+to Markdown/JSON. Every fact carries an explicit truth status; `VERIFIED`
+requires resolvable evidence.
 
-## Quick start (VP-0 proof)
+## Quick start
 
-Only Python 3.12+ is required (tested on 3.14); uv/pnpm/Docker are not needed
-for VP-0.
+Core/Web run in Docker Compose; the Runner is a native systemd service. Single
+runtime layout — `/var/lib/codevinci-atlas`. Web listens on loopback only,
+`http://127.0.0.1:3210`.
 
 ```bash
-# Unit acceptance (83 tests)
+# runtime identities and directories (root, idempotent), then profiles
+sudo bash scripts/atlas-runtime-setup.sh
+PYTHONPATH=apps/core python3 scripts/profile-init.py
+
+# systemd Runner (native host, UDS)
+sudo cp infra/systemd/codevinci-atlas-runner.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now codevinci-atlas-runner
+
+# Compose Core/Web (atlas UID/GID in .env; entrypoint applies migrations)
+docker compose up -d --build
+
+# stack and DB health
+curl -s http://127.0.0.1:3210/api/v1/health
+
+# staged acceptances (root, stack up)
+python3 scripts/run_vp1_acceptance.py      # 17/17
+python3 scripts/run_vp2_acceptance.py      # 20/20
+python3 scripts/run_vp3_acceptance.py      # 26/26 (VP-3)
+```
+
+Unit/integration tests for Core/Runner (no stack):
+
+```bash
 PYTHONPATH=apps/core:apps/runner:tests python3 -m unittest discover -s tests -p 'test_*.py'
-
-# Full VP-0 acceptance + evidence + scans
-PYTHONPATH=apps/core:apps/runner python3 scripts/run_acceptance.py
-
-# Identity-free profile diagnostics + web status
-PYTHONPATH=apps/core:apps/runner python3 scripts/atlas-doctor --web-status var/status.html
 ```
 
 Real subscription profile probes are behind an owner gate:
