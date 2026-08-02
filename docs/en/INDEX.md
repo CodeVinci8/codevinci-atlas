@@ -12,6 +12,7 @@ updated together when the public contract changes (Master Spec §9).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — architecture (VP-0 slice).
 - [`INSTALL.md`](INSTALL.md) — setup and run (VP-1).
 - [`OPERATIONS.md`](OPERATIONS.md) — operations (VP-1).
+- [`PROJECT_WORKSPACE.md`](PROJECT_WORKSPACE.md) — connecting projects (VP-2).
 
 ## Canonical Russian sources
 

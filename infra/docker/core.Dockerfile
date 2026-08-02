@@ -1,5 +1,10 @@
-# Core: FastAPI + SQLAlchemy, запуск НЕ от root (Master Spec §7.3, §34).
+# Core: FastAPI + SQLAlchemy, запуск НЕ от root (Master Spec §7.3, §34, §35).
 FROM python:3.12-slim AS base
+
+# git нужен для read-only baseline и безопасного worktree add (VP-2, §35).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 # uv для воспроизводимой установки из uv.lock.
 COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv
