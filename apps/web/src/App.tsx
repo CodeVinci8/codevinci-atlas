@@ -6,8 +6,11 @@ import {
 import { catalogs, detectInitialLocale, type Locale, type LocaleKey } from "./i18n";
 import { PortfolioView, ProductMapView } from "./productmap";
 import { WorkOrdersView } from "./workorders";
+import { RunsView } from "./runs";
+import { ProfilesView } from "./profiles";
+import type { SystemSummary } from "./api";
 
-type NavView = "projects" | "pulse" | "portfolio";
+type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles";
 
 type T = (key: LocaleKey) => string;
 function useT(locale: Locale): T {
@@ -106,6 +109,10 @@ export function App() {
           <PulseView t={t} />
         ) : view === "portfolio" ? (
           <PortfolioView t={t} onOpen={setSelected} />
+        ) : view === "runs" ? (
+          <RunsView t={t} />
+        ) : view === "profiles" ? (
+          <ProfilesView t={t} />
         ) : (
           <ProjectsView t={t} onOpen={setSelected} />
         )}
@@ -138,15 +145,43 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
         </span>
       </div>
       <nav className="nav" aria-label={t("nav.projects")}>
-        {item("projects", t("nav.projects"), "▤")}
-        {item("portfolio", t("nav.portfolio"), "◫")}
         {item("pulse", t("nav.pulse"), "◈")}
+        {item("projects", t("nav.projects"), "▤")}
+        {item("profiles", t("nav.profiles"), "◈")}
+        {item("runs", t("nav.runs"), "▶")}
+        {item("portfolio", t("nav.portfolio"), "◫")}
       </nav>
-      <div className="lang" role="group" aria-label={t("lang.switch")}>
-        <button aria-pressed={locale === "ru"} onClick={() => setLocale("ru")}>{t("lang.ru")}</button>
-        <button aria-pressed={locale === "en"} onClick={() => setLocale("en")}>{t("lang.en")}</button>
-      </div>
+      <LangSwitch t={t} locale={locale} setLocale={setLocale} />
     </aside>
+  );
+}
+
+// --- Polished RU|EN segmented control (§29: видимый текст, sliding indicator,
+// клавиатура + screen-reader, видимый focus, RU по умолчанию). -----------------
+function LangSwitch({ t, locale, setLocale }: {
+  t: T; locale: Locale; setLocale: (l: Locale) => void;
+}) {
+  const langs: Locale[] = ["ru", "en"];
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      setLocale(locale === "ru" ? "en" : "ru");
+    }
+  };
+  return (
+    <div className="lang-seg" role="radiogroup" aria-label={t("lang.aria")} onKeyDown={onKey}>
+      <span className="lang-globe" aria-hidden="true">◈</span>
+      <div className={`seg-track seg-${locale}`}>
+        <span className="seg-thumb" aria-hidden="true" />
+        {langs.map((l) => (
+          <button key={l} type="button" role="radio" aria-checked={locale === l}
+            tabIndex={locale === l ? 0 : -1} className={`seg-opt ${locale === l ? "active" : ""}`}
+            onClick={() => setLocale(l)}>
+            {l === "ru" ? "RU" : "EN"}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -537,49 +572,120 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
   );
 }
 
-// --- Pulse (health + audit) ------------------------------------------------
+// --- Pulse (system summary KPI + health + audit) ---------------------------
+function fmtBytes(n: number | null | undefined, na: string): string {
+  if (n === null || n === undefined) return na;
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+function fmtDuration(sec: number | null | undefined, na: string): string {
+  if (sec === null || sec === undefined) return na;
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function Kpi({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="kpi">
+      <span className="kpi-label">{label}</span>
+      <span className={mono ? "kpi-val mono" : "kpi-val"}>{value}</span>
+    </div>
+  );
+}
+
 function PulseView({ t }: { t: T }) {
   const [health, setHealth] = useState<Health | null>(null);
+  const [sys, setSys] = useState<SystemSummary | null>(null);
   const [audit, setAudit] = useState<AuditPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [partial, setPartial] = useState(false);
+  const na = t("sys.na");
 
   const refresh = useCallback(async () => {
-    try {
-      const [h, a] = await Promise.all([api.health(), api.audit()]);
-      setHealth(h); setAudit(a); setError(null);
-    } catch { setError(t("common.error")); }
+    const [h, a] = await Promise.allSettled([api.health(), api.audit()]);
+    if (h.status === "fulfilled") setHealth(h.value); else setHealth(null);
+    if (a.status === "fulfilled") setAudit(a.value);
+    // system summary — отдельно: его отсутствие не рушит весь Pulse (partial).
+    try { setSys((await api.systemSummary()).summary); setPartial(false); }
+    catch { setPartial(true); }
+    setError(h.status === "rejected" ? t("common.error") : null);
   }, [t]);
   useEffect(() => { refresh(); const id = setInterval(refresh, 5000); return () => clearInterval(id); }, [refresh]);
 
+  const runner = health?.runner.status ?? "UNKNOWN";
   return (
     <>
       <header className="page-head">
         <div>
           <h1>{t("health.title")}</h1>
-          <p className="muted page-desc">{t("app.subtitle")}</p>
+          <p className="muted page-desc">{t("sys.title")}</p>
         </div>
         <button className="btn" onClick={refresh}>{t("common.refresh")}</button>
       </header>
       {error && <p className="error" role="alert">{error}</p>}
+      {partial && !sys && <p className="warn" role="note">{t("common.partial")}</p>}
+
+      {/* Верхний ряд: службы (цвет + символ + текст, §29.3) */}
       {health && (
-        <section className="panel" aria-labelledby="h-h">
-          <h2 id="h-h">{t("health.core")}</h2>
-          <div className="stat-row">
-            <div className="stat"><span className="label">{t("health.core")}</span>
+        <section className="panel" aria-labelledby="svc-h">
+          <h2 id="svc-h">{t("sys.services")}</h2>
+          <div className="kpi-grid kpi-grid-4">
+            <div className="kpi"><span className="kpi-label">{t("health.core")}</span>
               <StatusBadge status={health.status} label={t(statusKey(health.status))} /></div>
-            <div className="stat"><span className="label">{t("health.runner")}</span>
-              <StatusBadge status={health.runner.status} label={t(statusKey(health.runner.status))} /></div>
-            <div className="stat"><span className="label">{t("health.db")}</span>
+            <div className="kpi"><span className="kpi-label">{t("health.runner")}</span>
+              <StatusBadge status={runner} label={t(statusKey(runner))} /></div>
+            <div className="kpi"><span className="kpi-label">{t("health.db")}</span>
               <StatusBadge status={health.core.db.ok ? "READY" : "DEGRADED"}
                 label={t(health.core.db.ok ? "status.READY" : "status.DEGRADED")} /></div>
-            <div className="stat"><span className="label">{t("health.version")}</span>
-              <span className="stat-val mono">{health.version}</span></div>
+            <div className="kpi"><span className="kpi-label">{t("sys.web")}</span>
+              <span className="badge st-muted" role="status"><span aria-hidden="true">○</span>{" "}
+                {t("common.unknown")}</span></div>
           </div>
-          {health.runner.status !== "READY" && (
-            <p className="warn" role="note">{t("runner.offlineHint")}</p>
-          )}
         </section>
       )}
+
+      {/* System summary — full-width, 4 сбалансированных KPI-колонки */}
+      <section className="panel" aria-labelledby="sys-h">
+        <h2 id="sys-h">{t("sys.title")}</h2>
+        {sys === null && !partial && <p className="muted">{t("common.loading")}</p>}
+        {sys && (
+          <div className="kpi-grid kpi-grid-4">
+            <Kpi label={`${t("sys.cpu")} (${t("sys.cores")})`}
+              value={sys.cpu.logical_cores !== null ? String(sys.cpu.logical_cores) : na} />
+            <Kpi label={t("sys.load")}
+              value={sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na} mono />
+            <Kpi label={t("sys.memory")}
+              value={`${fmtBytes(sys.memory.used_bytes, na)} / ${fmtBytes(sys.memory.total_bytes, na)}`} />
+            <Kpi label={t("sys.disk")}
+              value={`${fmtBytes(sys.disk.used_bytes, na)} / ${fmtBytes(sys.disk.total_bytes, na)}`} />
+            <Kpi label={t("sys.os")} value={`${sys.os.os_name ?? na} ${sys.os.os_version ?? ""}`.trim()} />
+            <Kpi label={t("sys.kernel")} value={sys.os.kernel ?? na} mono />
+            <Kpi label={t("sys.arch")} value={sys.os.arch ?? na} mono />
+            <Kpi label={t("sys.machine")} value={sys.os.machine_id ?? na} mono />
+            <Kpi label={t("sys.uptime")} value={fmtDuration(sys.host_uptime_s, na)} />
+            <Kpi label={t("sys.version")} value={sys.atlas_version} mono />
+            <Kpi label={t("sys.migration")} value={sys.db_migration ?? na} mono />
+            <Kpi label={t("sys.backup")}
+              value={sys.backup_age_s !== null ? fmtDuration(sys.backup_age_s, na) : t("sys.backupNone")} />
+            <Kpi label={t("sys.runsActive")}
+              value={sys.runs.active !== null ? String(sys.runs.active) : t("common.unknown")} />
+            <Kpi label={t("sys.runsQueued")}
+              value={sys.runs.queued !== null ? String(sys.runs.queued) : t("common.unknown")} />
+            <Kpi label={t("sys.writers")}
+              value={sys.leases.worktree_writers !== null ? String(sys.leases.worktree_writers) : t("common.unknown")} />
+            <Kpi label={t("sys.profileLeases")}
+              value={sys.leases.profile_leases !== null ? String(sys.leases.profile_leases) : t("common.unknown")} />
+          </div>
+        )}
+        {sys && <p className="muted field-hint">{t("sys.lastRefresh")}: <span className="mono">{sys.collected_at}</span></p>}
+        {health && health.runner.status !== "READY" && (
+          <p className="warn" role="note">{t("runner.offlineHint")}</p>
+        )}
+      </section>
+
       <section className="panel" aria-labelledby="a-h">
         <h2 id="a-h">{t("audit.title")}</h2>
         {audit && <p className="muted">{t("audit.total")}: <span className="mono">{audit.total}</span></p>}

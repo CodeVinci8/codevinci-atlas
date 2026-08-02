@@ -21,20 +21,25 @@
 
 ## Активный VP
 
-**Нет активного VP.** VP-0…VP-4 завершены и смёржены. Следующий гейт — **VP-5
-(Agent Pipeline, Master Spec §38)**, но он **не начат** и стартует только по
-отдельному решению владельца.
+**VP-5 — Agent Pipeline (Master Spec §38, §17): АКТИВЕН, локально реализован.**
+Ветка `atlas/vp-5-agent-pipeline` (не запушена). Детерминированная приёмка
+`scripts/run_vp5_acceptance.py` — **26/26 PASS** против реальной миграции
+`0005_agent_pipeline`, реального ORM/БД и ASGI-стека (TestClient), с
+fake-адаптерами (§32.2). Полная Python-регрессия — 243 OK. Evidence + SHA-256 —
+`var/artifacts/vp5/`.
+
+**Реальный provider-E2E** (Planner→Builder→Reviewer на подписке) — **честно
+pending** до отдельной owner-авторизации. Пуша/PR/merge VP-5 **ещё нет**.
 
 ## NEXT_ACTION
 
-Owner проводит финальный визуальный обзор **VP-4 Work Orders console** на
-`http://127.0.0.1:3210` (через SSH-туннель `ssh -N -L 3210:127.0.0.1:3210
-<host>`): вкладка «Work Orders» — VP Spec из принятого Brief/Map, список Work
-Orders и переходы состояний, решения оптимизатора (READY/MERGE/SPLIT/
-OWNER_REQUIRED/SWITCH_PROFILE), checkpoint/handoff, свежая изолированная
-реконструкция и next action; RU/EN-паритет, тёмная тема по умолчанию, a11y.
+Owner подтверждает external-action checkpoint VP-5: (1) первый push ветки
+`atlas/vp-5-agent-pipeline`; (2) русский PR; (3) после зелёного CI на точном
+head-SHA — squash-merge; и отдельно (4) авторизует ограниченный реальный
+provider-E2E (точные профили/модели/команды/лимит вызовов — в чекпойнте).
 
 ## Границы
 
-Один активный VP-гейт (WIP=1). **VP-5 молча не начинать** — отдельное решение
-владельца. LICENSE — отдельное решение владельца.
+Один активный VP-гейт (WIP=1) — VP-5. **VP-6…VP-9 не начинать.** Полный
+операционный console Profiles/Pulse (40 профилей) — VP-8. Cookie-import —
+`UNSUPPORTED`. LICENSE — отдельное решение владельца.

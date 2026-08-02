@@ -285,11 +285,57 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
 **PR #6** (squash), CI зелёный на точном head-SHA `280ee35`, merge-commit
 `7a3f82d` `CodeVinci8/codevinci-atlas`.
 
+## VP-5 — Agent Pipeline (АКТИВЕН, локально реализован; не смёржен)
+
+- **VP5-D1 (session-семантики).** Три РАЗДЕЛЬНЫЕ семантики (§12.3), не смешиваем:
+  `EXACT_RESUME` (`--resume <id>`, тот же профиль), `FORK_SESSION`
+  (`--resume <id> --fork-session` — копирует историю оригинала, тот же профиль,
+  явное намерение) и `FRESH_WITH_HANDOFF` (genuinely fresh, без `--resume`,
+  контекст только из HandoffPackage — единственный безопасный вариант при смене
+  профиля). Сверено с claude 2.1.220 `--help`.
+- **VP5-D2 (router).** Приоритет §17.3 детерминирован, reason-coded; запрошенный
+  недоступный профиль/модель → пустой effective + `*_UNAVAILABLE` (уход в
+  OWNER_REQUIRED), **никакой** молчаливой замены.
+- **VP5-D3 (один writer).** `run_leases` с `UNIQUE(profile_id, released_at='')`
+  → не более одной активной аренды на профиль; worktree-writer — прежний
+  `worktree_leases`. Смена профиля: release-before-acquire, второго writer нет.
+  Доказано конкурентными негативными тестами (не только схемным ограничением).
+- **VP5-D4 (durable-состояние).** Миграция `0005_agent_pipeline` = 16 таблиц;
+  секреты/email/cookie/raw path/transcript/полный payload не хранятся. Auth
+  нормализуется без чтения credential-файлов; PII (email/orgId/orgName)
+  отбрасывается. Ёмкость: verified-only, иначе `UNKNOWN`/`STALE`.
+- **VP5-D5 (Pulse system-summary).** Sanitized: без IP/hostname/nodename/Unix-имён/
+  auth-путей/env; machine_id — необратимый хеш; недоступное → partial `None`,
+  не фикция. Web=`UNKNOWN` (Core не наблюдает Web напрямую).
+- **VP5-D6 (граница scope).** Cookie-import → `UNSUPPORTED` (до отдельного
+  security-spike). Полный операционный console (40 профилей, saved views, bulk,
+  история) — VP-8. Реальный provider-E2E — под owner-гейтом.
+
+Приёмка `scripts/run_vp5_acceptance.py`: **26/26** (детерминированно, реальная
+миграция `0005` + реальные сервисы + ASGI TestClient + fake-адаптеры §32.2).
+Полная Python-регрессия 247 OK. Evidence + SHA-256 — `var/artifacts/vp5/`.
+
+- **VP5-D7 (реальный provider-E2E — ВЫПОЛНЕН).** `scripts/run_vp5_real_e2e.py`:
+  реальный Codex Planner (`codex-plus-01`) → Claude Builder (`claude-pro-01`) →
+  независимый Codex Reviewer (`codex-plus-02`) через нативные адаптеры Atlas
+  (runuser + изолированный env под идентичностью профиля) на СИНТЕТИЧЕСКОМ
+  git-репо. **3/6** подписочных вызовов. Реальный артефакт `calc.py`
+  (`def add(a,b): return a+b`, sha256 в evidence) произведён реальным Claude,
+  отревьюен реальным независимым Codex → **PASS**. Один writer
+  (`max_concurrent_writers=1`), Reviewer другой профиль+сессия, `fix_loops=0`,
+  без transcript/credentials (secret-scan чист). Evidence —
+  `var/artifacts/vp5/real_e2e/`. Наблюдение: `claude auth status --json` может
+  сообщать `loggedIn=true` при истёкшем OAuth-токене (первый прогон дал
+  транзиентный `401 OAuth expired`, корректно классифицирован как AUTH_EXPIRED,
+  повторный прогон прошёл). Реальный и детерминированный уровни — раздельные
+  evidence.
+
 ## Требуют отдельного подтверждения владельца
 
 - Создание/использование GitHub-репозитория за пределами read-only (репозиторий
   `CodeVinci8/codevinci-atlas` уже существует и пуст — первый push это гейт).
 - Выбор LICENSE (кандидаты MIT/Apache-2.0; выбирается после reuse-аудита, §20.4).
-- Первый commit/push/merge.
+- Первый commit/push/merge VP-5 (ветка `atlas/vp-5-agent-pipeline`).
+- **Реальный provider-E2E VP-5** (Codex/Claude подписочные вызовы).
 - Official login профилей (Codex CLI 0.146.0 уже установлен владельцем).
 - File Atelier increment, публичный release/tag, домен/TLS, активация cookie-импорта.

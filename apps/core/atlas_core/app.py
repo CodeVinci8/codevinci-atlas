@@ -46,6 +46,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .api_workorders import router as workorders_router
     app.include_router(workorders_router)
 
+    # VP-5 Agent Pipeline: runs, profiles/models, system summary.
+    from .api_profiles import router as profiles_router_v5
+    from .api_runs import router as runs_router
+    from .api_system import router as system_router
+    app.include_router(runs_router)
+    app.include_router(profiles_router_v5)
+    app.include_router(system_router)
+
     @app.get("/api/v1/health")
     def health() -> JSONResponse:
         # Core проверяет собственную БД и Runner (честный degraded).

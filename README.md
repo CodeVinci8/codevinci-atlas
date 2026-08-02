@@ -37,8 +37,15 @@ versioned-памятью вместо бесконечного чата.
   состояние только из HandoffPackage. Смёржен через PR #6 (squash `7a3f82d`,
   CI head `280ee35`); живая БД — на `0004_work_orders`.
 
-Активного VP нет. Следующий этап — **VP-5: Agent Pipeline**
-(Master Spec §38) — **не начат** и стартует по отдельному решению владельца.
+**VP-5 — Agent Pipeline (Master Spec §38, §17): АКТИВЕН, локально реализован**
+([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — конвейер Codex Planner → Claude Builder →
+независимый Codex Reviewer: durable Runs (жизненный цикл, идемпотентность,
+optimistic-concurrency), router без silent fallback, один writer (worktree +
+profile lease), три раздельные session-семантики (EXACT_RESUME/FORK_SESSION/
+FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption-recovery, Profiles MVP,
+full-width Pulse, RU/EN. Детерминированная приёмка `run_vp5_acceptance.py` —
+**26/26** (реальная миграция `0005`, реальные сервисы, fake-адаптеры). **Реальный
+provider-E2E — pending** до owner-авторизации; PR/merge ещё нет.
 
 ## Быстрый старт
 

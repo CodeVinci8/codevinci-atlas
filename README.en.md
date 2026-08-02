@@ -38,8 +38,15 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
   consumer** that reconstructs state from the HandoffPackage alone. Merged via
   PR #6 (squash `7a3f82d`, CI head `280ee35`); live DB on `0004_work_orders`.
 
-No VP is currently active. Next stage — **VP-5: Agent Pipeline** (Master Spec
-§38) — is **not started**; it begins only by separate owner decision.
+**VP-5 — Agent Pipeline (Master Spec §38, §17): ACTIVE, implemented locally**
+([`docs/vp/VP-5.md`](docs/vp/VP-5.md)) — the Codex Planner → Claude Builder →
+independent Codex Reviewer pipeline: durable Runs (lifecycle, idempotency,
+optimistic concurrency), router with no silent fallback, one writer (worktree +
+profile lease), three distinct session semantics (EXACT_RESUME / FORK_SESSION /
+FRESH_WITH_HANDOFF), bounded rate-limit/auth/interruption recovery, Profiles MVP,
+full-width Pulse, RU/EN. Deterministic acceptance `run_vp5_acceptance.py` —
+**26/26** (real `0005` migration, real services, fake adapters). **Real provider
+E2E is pending** owner authorization; no PR/merge yet.
 
 ## Quick start
 

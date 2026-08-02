@@ -72,12 +72,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   color: var(--ember-strong); box-shadow: inset 2px 0 0 var(--ember);
 }
 .nav-item.active .nav-ico { color: var(--ember); }
-.lang { margin-top: auto; display: flex; gap: 6px; padding: 6px; }
-.lang button {
-  flex: 1; background: transparent; color: var(--muted); border: 1px solid var(--border);
-  padding: 5px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+
+/* --- Polished RU|EN segmented control (§29) --- */
+.lang-seg { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 6px 4px; }
+.lang-globe { color: var(--muted); font-size: 14px; }
+.seg-track {
+  position: relative; display: flex; flex: 1; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 2px;
 }
-.lang button[aria-pressed="true"] { background: var(--ember); color: #14100c; border-color: var(--ember); font-weight: 600; }
+.seg-thumb {
+  position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc(50% - 2px);
+  background: var(--ember); border-radius: 6px; transition: transform 160ms ease;
+}
+.seg-track.seg-en .seg-thumb { transform: translateX(100%); }
+.seg-opt {
+  position: relative; z-index: 1; flex: 1; background: transparent; border: 0;
+  color: var(--muted); padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; letter-spacing: .04em; transition: color 160ms ease;
+}
+.seg-opt.active { color: #14100c; }
+.seg-opt:focus-visible { outline: 2px solid var(--ember-strong); outline-offset: 2px; }
 
 .main { padding: 26px 30px 60px; min-width: 0; }
 .offline-banner {
@@ -281,6 +295,56 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 460px) {
   .node-type { min-width: 0; }
   .decision-head { flex-direction: column; }
+}
+
+/* --- VP-5: Pulse KPI grid (full-width, сбалансированные колонки) --- */
+.kpi-grid { display: grid; gap: 12px; width: 100%; }
+.kpi-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.kpi {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
+  min-width: 0;
+}
+.kpi-label { font-size: 12px; color: var(--muted); }
+.kpi-val { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+
+/* --- VP-5: Profiles cards --- */
+.card-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.p-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  transition: border-color 160ms ease;
+}
+.p-card:hover { border-color: var(--ember-dim); }
+.p-card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.p-alias { font-weight: 600; }
+.p-prov { font-size: 12px; }
+.p-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; }
+.p-row .label { color: var(--muted); font-size: 12.5px; }
+.p-next { margin: 4px 0 0; font-size: 12.5px; }
+.onb-list { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
+.filter-field { margin: 12px 0; }
+
+/* --- VP-5: Runs timeline --- */
+.timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.timeline li { display: flex; gap: 10px; align-items: baseline; font-size: 13.5px; }
+.t-time { color: var(--muted); font-size: 12px; min-width: 62px; }
+
+/* --- VP-5: view-mode segmented toggle (cards/table) --- */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  background: transparent; color: var(--muted); border: 0; padding: 6px 12px;
+  cursor: pointer; font-size: 12.5px; transition: background 160ms ease, color 160ms ease;
+}
+.seg button.active { background: var(--ember); color: #14100c; font-weight: 600; }
+.seg button:focus-visible { outline: 2px solid var(--ember-strong); outline-offset: -2px; }
+
+/* --- VP-5 responsive: 1440→4col, 1024/768→2col, 390→1col --- */
+@media (max-width: 1024px) { .kpi-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px) {
+  .kpi-grid-4 { grid-template-columns: 1fr; }
+  .card-grid { grid-template-columns: 1fr; }
+  .lang-seg { margin: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
