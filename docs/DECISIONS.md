@@ -114,10 +114,45 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   в `pnpm-workspace.yaml`. `pnpm install --frozen-lockfile` и `pnpm build` идут
   из чистого состояния без правки `node_modules`.
 
-## VP-1 — ЗАВЕРШЁН (17/17)
+## VP-1 — ЗАВЕРШЁН (17/17), СМЁРЖЕН
 
 Приёмка `scripts/run_vp1_acceptance.py`: 17/17 PASS против реально развёрнутого
 стека (Compose Core/Web + systemd Runner). Evidence — `var/artifacts/vp1/`.
+Смёржен в `main` через PR #2 (squash) `CodeVinci8/codevinci-atlas`.
+
+## Технические решения VP-2
+
+- **VP2-D1 (персистентность только через Alembic).** Таблицы VP-2 —
+  `projects/git_baselines/worktrees/worktree_leases` — добавлены миграцией
+  `0002_project_workspace` и ORM-моделями (SQLAlchemy 2.x). VP-0 `Store`
+  (runs/leases/…) остаётся тестовым; прод-БД `atlas.db` — только Alembic (VP1-D1).
+- **VP2-D2 (allowlist + канонические пути).** Все пути проектов/worktree/intake
+  проходят `WorkspaceGuard`: `realpath` (резолв symlink) + вхождение в явные
+  корни `<data_dir>/{workspaces,intake,worktrees}`. Traversal, абсолютные пути,
+  Windows-разделители и symlink-escape отклоняются. Содержимое репо/архива —
+  данные, оно не расширяет allowlist (§30.2).
+- **VP2-D3 (read-only baseline, non-destructive).** Baseline собирается только
+  чтением (`git status/rev-parse/remote/ls-files`), `GIT_TERMINAL_PROMPT=0`,
+  `GIT_OPTIONAL_LOCKS=0`. Remotes санируются (userinfo вырезается, redact) —
+  credential-bearing URL не хранятся. Никаких `reset --hard`/`clean`/тихого
+  stash/checkout; dirty сохраняется байт-в-байт (доказано приёмкой #4/#7).
+- **VP2-D4 (worktree add — не изменяет оригинал).** `git worktree add -b` создаёт
+  новую ветку и связанный каталог, не трогая рабочее дерево/dirty оригинала.
+  Ветка обязана быть `atlas/vp-<n>-<slug>`; путь — канонический в allowlist без
+  перезаписи. Core-контейнеру добавлен `git`; синтетические репо во владении
+  `atlas` (без dubious-ownership).
+- **VP2-D5 (один writer на worktree).** `worktree_leases` с UNIQUE(worktree,
+  released_at='') — атомарный acquire; второй writer → `WORKTREE_CONFLICT`.
+  Reconcile освобождает осиротевшую аренду ТОЛЬКО после проверки живости
+  процесса и чистоты Git (автоугон запрещён; та же семантика, что VP-0 leases).
+- **VP2-D6 (враждебный intake архивов).** Ручная поэлементная распаковка tar/zip
+  внутри intake-корня: блокируются абсолютные/`..`/Windows-пути, symlink/
+  hardlink, device/спец-файлы, превышение числа/размера, дубликаты. Ни один файл
+  вне intake (доказано #11). Intake read-only (0444/0555).
+- **VP2-D7 (Ember Web без копирования).** Project Workspace UI — собственный
+  Ember developer-cockpit; TonWave/Sub2API использованы как визуальные референсы
+  (иерархия/плотность), без копирования кода/стилей/строк/лейаутов — см.
+  `docs/REUSE_REGISTER.md`.
 
 ## Требуют отдельного подтверждения владельца
 
