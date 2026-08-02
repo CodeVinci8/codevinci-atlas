@@ -136,3 +136,206 @@ class WorktreeLease(Base):
     expires_at: Mapped[str] = mapped_column(String(30))
     heartbeat_at: Mapped[str] = mapped_column(String(30))
     released_at: Mapped[str] = mapped_column(String(30), default="")
+
+
+# --- VP-3 Product Map (Master Spec §36) ------------------------------------
+# Immutable-версии Brief/Map, поштучные решения, envelope, parking lot,
+# approval, один активный VP, идемпотентность. Содержимое bounded+redacted;
+# content_hash — sha256 над canonical-JSON. Таблицы создаёт только Alembic.
+
+
+class ProductIntake(Base):
+    """Bounded owner-intake проекта (§36). Только данные, не команды (§30.2)."""
+
+    __tablename__ = "product_intakes"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")   # redacted, bounded
+    refs_json: Mapped[str] = mapped_column(Text, default="[]")      # sanitized links/baseline refs
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class Brief(Base):
+    """Immutable-версия Product Brief (§36). Правка = новая версия."""
+
+    __tablename__ = "briefs"
+    __table_args__ = (UniqueConstraint("project_id", "version", name="uq_brief_project_version"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    parent_id: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)  # draft|approved|superseded|rejected
+    content_json: Mapped[str] = mapped_column(Text, default="{}")   # redacted, bounded
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    envelope_json: Mapped[str] = mapped_column(Text, default="{}")
+    envelope_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class MapVersion(Base):
+    """Immutable-снапшот Project Map (§36)."""
+
+    __tablename__ = "map_versions"
+    __table_args__ = (UniqueConstraint("project_id", "version", name="uq_mapversion_project_version"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    parent_id: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    content_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class MapNode(Base):
+    """Узел версии Map (§27.6, §36)."""
+
+    __tablename__ = "map_nodes"
+    __table_args__ = (UniqueConstraint("map_version_id", "node_key", name="uq_mapnode_version_key"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    map_version_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    node_key: Mapped[str] = mapped_column(String(80))
+    node_type: Mapped[str] = mapped_column(String(30))  # goal|user_problem|brief_decision|vp|blocker|evidence_ref|next_action|parking_item
+    title: Mapped[str] = mapped_column(String(300), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    truth_status: Mapped[str] = mapped_column(String(20), default="UNKNOWN")
+    evidence_ref: Mapped[str] = mapped_column(String(120), default="")
+    evidence_hash: Mapped[str] = mapped_column(String(80), default="")
+    data_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class MapEdge(Base):
+    """Типизированное ребро версии Map (§36)."""
+
+    __tablename__ = "map_edges"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    map_version_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    src_key: Mapped[str] = mapped_column(String(80))
+    dst_key: Mapped[str] = mapped_column(String(80))
+    edge_type: Mapped[str] = mapped_column(String(20))  # dependency|blocks|proves|includes|next
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class Decision(Base):
+    """Поштучное решение Brief (§36). Оптимистичная версия для accept/reject."""
+
+    __tablename__ = "decisions"
+    __table_args__ = (UniqueConstraint("project_id", "decision_key", name="uq_decision_project_key"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    decision_key: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(300), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="proposed", index=True)  # proposed|accepted|rejected
+    required: Mapped[bool] = mapped_column(Boolean, default=False)
+    truth_status: Mapped[str] = mapped_column(String(20), default="HYPOTHESIS")
+    note: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class DecisionEvent(Base):
+    """Append-only история переходов решения (§36)."""
+
+    __tablename__ = "decision_events"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(40), index=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    from_status: Mapped[str] = mapped_column(String(20), default="")
+    to_status: Mapped[str] = mapped_column(String(20), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class ParkingItem(Base):
+    """Parking-lot: вне активного scope, с причиной и условием возврата (§36)."""
+
+    __tablename__ = "parking_items"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    return_condition: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="parked", index=True)  # parked|promoted|archived
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class Approval(Base):
+    """Approval-record: связывает точные Brief/Map/envelope/decisions-hash (§36)."""
+
+    __tablename__ = "approvals"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    brief_id: Mapped[str] = mapped_column(String(40))
+    brief_hash: Mapped[str] = mapped_column(String(80))
+    map_version_id: Mapped[str] = mapped_column(String(40), default="")
+    envelope_hash: Mapped[str] = mapped_column(String(80), default="")
+    decisions_hash: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+
+class VpActivation(Base):
+    """Активация VP. UNIQUE(project_id, active_slot) даёт ровно один active (§36).
+
+    active_slot == 'ACTIVE' — активная запись; после деактивации slot = id
+    (уникален), поэтому вторая одновременная активация детерминированно падает.
+    """
+
+    __tablename__ = "vp_activations"
+    __table_args__ = (UniqueConstraint("project_id", "active_slot", name="uq_active_vp"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    vp_key: Mapped[str] = mapped_column(String(80))
+    active_slot: Mapped[str] = mapped_column(String(40))  # 'ACTIVE' | id
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    activated_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class IdempotencyKey(Base):
+    """Идемпотентность мутаций: повтор возвращает прежнюю сущность (§25.1)."""
+
+    __tablename__ = "idempotency_keys"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(80), default="")
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    entity_id: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
