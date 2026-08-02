@@ -54,6 +54,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(profiles_router_v5)
     app.include_router(system_router)
 
+    # VP-6 Review & Quality: reviews, findings, QualityReport, audit, waiver, fix WO.
+    from .api_reviews import router as reviews_router
+    app.include_router(reviews_router)
+
     @app.get("/api/v1/health")
     def health() -> JSONResponse:
         # Core проверяет собственную БД и Runner (честный degraded).
@@ -105,5 +109,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         audit.record("core.started", f"Core {settings.version} env={settings.env}")
+        # Идемпотентная сверка allowlisted реестра профилей → durable-таблица
+        # (VP6-D2): чтобы 4 профиля появлялись в UI после deploy/рестарта. Только
+        # safe-метаданные; не читает credentials и не стартует provider-сессии.
+        # Best-effort: не роняет старт Core, если таблицы/реестра ещё нет.
+        try:
+            from sqlalchemy import inspect as _inspect
+            if _inspect(get_engine()).has_table("agent_profiles"):
+                from .profile_reconcile import reconcile_profiles
+                res = reconcile_profiles(actor="startup")
+                audit.record("profiles.registry.reconciled.startup",
+                             f"total={res.total}")
+        except Exception as exc:  # noqa: BLE001
+            from .redaction import redact
+            audit.record("profiles.registry.reconcile.error", redact(str(exc))[:80])
 
     return app

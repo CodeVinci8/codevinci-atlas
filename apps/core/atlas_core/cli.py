@@ -169,6 +169,38 @@ def cmd_backup(args) -> int:
     return 0 if manifest["integrity_ok"] and scan["clean"] else 1
 
 
+def cmd_profiles(args) -> int:
+    """Идемпотентная сверка/список профилей (Master Spec §11, VP6-D2).
+
+    `reconcile` синхронизирует allowlisted файловый реестр → durable-таблицу
+    `agent_profiles` (safe-метаданные), чтобы 4 профиля появились в UI. Не читает
+    credentials и НЕ стартует provider-сессии.
+    """
+
+    settings = load_settings()
+    from .db import init_engine
+    init_engine(settings.db_url, settings.db_path)
+    if args.action == "reconcile":
+        from .profile_reconcile import reconcile_profiles
+        res = reconcile_profiles(actor=args.actor or "deploy").to_dict()
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            print(f"Профили сверены: total={res['total']} "
+                  f"создано={len(res['created'])} обновлено={len(res['updated'])}")
+            print(f"  по провайдерам: {res['by_provider']}")
+            print(f"  aliases: {sorted(res['created'] + res['updated'])}")
+        return 0
+    if args.action == "list":
+        from .agent_registry import ProfileService
+        rows = ProfileService().list_profiles()
+        safe = [{"alias": r["alias"], "provider": r["provider"], "state": r["state"]}
+                for r in rows]
+        print(json.dumps(safe, ensure_ascii=False, indent=2))
+        return 0
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="atlas", description="CodeVinci Atlas CLI")
     ap.add_argument("--json", action="store_true", help="вывод в JSON")
@@ -183,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         if name == "backup":
             p.add_argument("--out", help="каталог для архива")
         p.set_defaults(func=fn)
+    pp = sub.add_parser("profiles", help="сверка/список профилей (safe-метаданные)")
+    pp.add_argument("action", choices=["reconcile", "list"],
+                    help="reconcile: реестр→БД; list: safe-список")
+    pp.add_argument("--json", action="store_true")
+    pp.add_argument("--actor", default="deploy", help="актор для Audit")
+    pp.set_defaults(func=cmd_profiles)
     args = ap.parse_args(argv)
     return args.func(args)
 
