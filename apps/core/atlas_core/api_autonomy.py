@@ -10,13 +10,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from . import autonomy, emergency
 from .autonomy import ALL_CAPABILITIES, MODES, VP7_HARD_DENIED
-from .db import session_scope
 from .merge_gate import MergeRequest, evaluate_merge
-from .orm import GithubDelivery
 
 router = APIRouter(prefix="/api/v1", tags=["autonomy"])
 
@@ -175,16 +172,25 @@ class MergeGatePreview(BaseModel):
 @router.post("/github/merge-gate/preview")
 def merge_gate_preview(req: MergeGatePreview) -> JSONResponse:
     dec = evaluate_merge(MergeRequest(**req.model_dump()))
-    return JSONResponse({"gate": dec.to_dict()})
+    # Персистируем решение gate/доставки в durable-таблицу (идемпотентно), чтобы
+    # экран Автономия показывал реальную историю доставки, а не только фикстуры.
+    from . import deliveries
+    delivery = deliveries.record_delivery(
+        project_id=req.project_id, repo=req.repo, base=req.base, branch=req.branch,
+        head_sha=req.head_sha, pr_number=req.pr_number or None,
+        checks_state=(req.checks or {}).get("state", "UNKNOWN"),
+        checks_head_sha=(req.checks or {}).get("head_sha", req.head_sha),
+        mergeable=bool((req.mergeability or {}).get("mergeable")),
+        merge_state=(req.mergeability or {}).get("state", ""),
+        review_package_id=(req.review_package or {}).get("id", ""),
+        quality_report_id=(req.quality_report or {}).get("id", ""),
+        gate_decision="PERMIT" if dec.permitted else "DENY",
+        gate_reason=dec.reason_code, grant_id=req.grant_id, actor="core")
+    return JSONResponse({"gate": dec.to_dict(), "delivery": delivery})
 
 
 @router.get("/github/deliveries")
 def list_deliveries(project_id: str | None = Query(None),
                     limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
-    with session_scope() as s:
-        stmt = select(GithubDelivery).order_by(GithubDelivery.created_at.desc(),
-                                               GithubDelivery.id.desc())
-        if project_id:
-            stmt = stmt.where(GithubDelivery.project_id == project_id)
-        rows = s.execute(stmt.limit(limit)).scalars().all()
-        return JSONResponse({"deliveries": [r.to_dict() for r in rows]})
+    from . import deliveries
+    return JSONResponse({"deliveries": deliveries.list_deliveries(project_id=project_id, limit=limit)})

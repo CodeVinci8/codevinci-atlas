@@ -251,6 +251,49 @@ class TestMergeGate(VP7Base):
 
 
 # ---------------------------------------------------------------------------
+class TestDeliveryPersistence(VP7Base):
+    def test_record_is_idempotent_and_captures_gate(self):
+        from atlas_core.deliveries import list_deliveries, record_delivery
+        d1 = record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
+                             head_sha="HEAD1", gate_decision="DENY", gate_reason="REVIEWER_NOT_PASS",
+                             checks_state="GREEN")
+        d2 = record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
+                             head_sha="HEAD1", gate_decision="PERMIT", gate_reason="MERGE_PERMITTED",
+                             mergeable=True)
+        # тот же ключ → та же строка (upsert), обновлённое решение
+        self.assertEqual(d1["id"], d2["id"])
+        self.assertEqual(d2["gate_decision"], "PERMIT")
+        self.assertEqual(len(list_deliveries(project_id="p")), 1)
+        # другой head → новая строка
+        record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
+                        head_sha="HEAD2", gate_decision="PERMIT")
+        self.assertEqual(len(list_deliveries(project_id="p")), 2)
+
+    def test_merge_gate_preview_api_persists_delivery(self):
+        from atlas_core.app import create_app
+        from atlas_core.autonomy import create_grant
+        from atlas_core.deliveries import list_deliveries
+        from atlas_core.settings import load_settings
+        from starlette.testclient import TestClient
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         environment="synthetic", allowed_repos=["a/b"], allowed_bases=["main"],
+                         reason="r")
+        client = TestClient(create_app(load_settings()))
+        resp = client.post("/api/v1/github/merge-gate/preview", json={
+            "repo": "a/b", "base": "main", "branch": "atlas/vp-7", "head_sha": "HEADX",
+            "project_id": "p", "grant_id": g["id"], "environment": "synthetic",
+            "review_package": {"status": "valid", "head_sha": "HEADX"},
+            "quality_report": {"verdict": "PASS", "blocking_count": 0},
+            "checks": {"head_sha": "HEADX", "state": "GREEN"},
+            "mergeability": {"mergeable": True, "state": "CLEAN"}, "pr_number": 5})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["gate"]["permitted"])
+        self.assertEqual(body["delivery"]["gate_decision"], "PERMIT")
+        self.assertGreaterEqual(len(list_deliveries(project_id="p")), 1)
+
+
+# ---------------------------------------------------------------------------
 class TestTimeMachine(VP7Base):
     def _ckpt(self, **over):
         from atlas_core.timemachine import CheckpointInputs, create_checkpoint
