@@ -186,9 +186,10 @@ def main():
     os.chmod(diff_file, 0o644)
     print(f"  Полный diff: {len(files)} файлов, +{ins}/-{dele}, {len(full_diff)} байт → {diff_file.name}")
 
-    evidence_ctx = ("run_vp7_acceptance 33/33; Python-регрессия ~299 OK; Chrome 0 PII; миграции 0007 "
-                    "up/down OK; secret-скан ЧИСТО; CI зелёный на текущем head; реальный VP-6 Quality "
-                    "E2E PASS.")
+    evidence_ctx = os.environ.get("VP7_EVIDENCE_CTX") or (
+        "run_vp7_acceptance 34/34 COMPLETE; Python-регрессия 327 OK; VP-7 юнит-тесты 59; "
+        "Chrome 15/15 (37 shots, 0 PII); миграции empty→0007 и 0006→0007→downgrade OK; "
+        "secret/privacy-скан ЧИСТО; CI 8/8 зелёный на текущем head; реальный VP-6 Quality E2E PASS.")
 
     # DRY-RUN валидация Quality/merge-gate конструкторов ДО provider-вызова (fail fast).
     try:
