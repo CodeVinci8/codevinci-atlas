@@ -282,8 +282,19 @@ class VP7:
             LocalForge,
         )
         forge = LocalForge(self.bare, "acme/demo")
-        ad = GitHubAdapter(forge=forge, contract=GitContract())
+        # Bypass A: production-адаптер (enforce_grant=True) отвергает write без grant.
+        prod = GitHubAdapter(forge=forge, contract=GitContract())
         _git(self.wc, "checkout", "-b", "atlas/vp-7-a")
+        Path(self.wc, "greq.py").write_text("x=0")
+        self._grant_required_ok = False
+        try:
+            prod.commit(self.wc, "VP-7: без grant")
+        except GitContractError as exc:
+            self._grant_required_ok = exc.code == "GRANT_REQUIRED"
+        _git(self.wc, "checkout", "--", ".")
+        _git(self.wc, "clean", "-fdq")
+        # enforce_grant=False — явная test-only граница для детерминированной идемпотентности.
+        ad = GitHubAdapter(forge=forge, contract=GitContract(), enforce_grant=False)
         Path(self.wc, "f.py").write_text("x=1")
         sha = ad.commit(self.wc, "VP-7: изменение")
         p1 = ad.push_feature(self.wc, "atlas/vp-7-a")
@@ -305,9 +316,10 @@ class VP7:
                            title="VP-7 демо", body="тело")
         self.art("c13_16_github.json", {"push1_idem": p1["idempotent"], "push2_idem": p2["idempotent"],
                  "russian_enforced": russian_enforced, "author_verified": author_verified,
-                 "pr1": pr1["number"], "pr2": pr2["number"]})
-        self.rec(13, "branch/commit/push идемпотентны",
-                 (not p1["idempotent"]) and p2["idempotent"], f"push2_idem={p2['idempotent']}")
+                 "grant_required_ok": self._grant_required_ok, "pr1": pr1["number"], "pr2": pr2["number"]})
+        self.rec(13, "branch/commit/push идемпотентны + production требует grant (bypass A)",
+                 (not p1["idempotent"]) and p2["idempotent"] and self._grant_required_ok,
+                 f"push2_idem={p2['idempotent']} grant_required={self._grant_required_ok}")
         self.rec(14, "Русский commit-контракт энфорсится", russian_enforced,
                  f"russian_enforced={russian_enforced}")
         self.rec(15, "Настроенный автор проверяется", author_verified,
@@ -326,17 +338,20 @@ class VP7:
         def mk(**over):
             base = dict(repo="acme/demo", base="main", branch="atlas/vp-7-a", head_sha=sha,
                         project_id="proj_v7", grant_id=g["id"], environment="synthetic",
-                        review_package={"status": "valid", "head_sha": sha},
-                        quality_report={"verdict": "PASS", "blocking_count": 0},
+                        review_package={"id": "rpkg_acc", "status": "valid", "head_sha": sha},
+                        quality_report={"verdict": "PASS", "blocking_count": 0,
+                                        "review_package_id": "rpkg_acc"},
                         checks=forge.checks(sha), mergeability=forge.mergeability(prn), pr_number=prn)
             base.update(over)
             return MergeRequest(**base)
 
-        stale_review = evaluate_merge(mk(review_package={"status": "valid", "head_sha": "OLD"}))
+        stale_review = evaluate_merge(mk(review_package={"id": "rpkg_acc", "status": "valid",
+                                                         "head_sha": "OLD"}))
         stale_ci = evaluate_merge(mk(checks={"head_sha": "OLD", "state": "GREEN"}))
-        blocking = evaluate_merge(mk(quality_report={"verdict": "PASS", "blocking_count": 1}))
+        blocking = evaluate_merge(mk(quality_report={"verdict": "PASS", "blocking_count": 1,
+                                                     "review_package_id": "rpkg_acc"}))
         # Fix3: неполные current-head evidence → fail-closed deny.
-        missing_rp_head = evaluate_merge(mk(review_package={"status": "valid"}))
+        missing_rp_head = evaluate_merge(mk(review_package={"id": "rpkg_acc", "status": "valid"}))
         missing_ci_head = evaluate_merge(mk(checks={"state": "GREEN"}))
         # Fix2: scopeless grant → deny в merge gate.
         g_empty = self._grant(capabilities=["merge_after_pass"])

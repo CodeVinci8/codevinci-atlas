@@ -150,6 +150,19 @@ class TimeMachineError(Exception):
         self.message = message
 
 
+def _project_repo(project_id: str | None) -> str | None:
+    """Доверенное имя repo (owner/repo) из хранимого project/source. Только для
+    github-источника; иначе None (repo-scope не выводится из локального пути)."""
+    if not project_id:
+        return None
+    from .orm import Project
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None or p.source_kind != "github":
+            return None
+        return (p.source_ref or "").strip() or None
+
+
 def _grant_is_fresh(grant_id: str) -> tuple[bool, str]:
     """Grant валиден и не протух (для replay/fork — не переиспользуем stale grant)."""
     d = autonomy.get_grant(grant_id) if grant_id else None
@@ -178,10 +191,12 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     ветку**, НЕ переписывая/не сбрасывая source-ветку, НЕ переиспользуя stale
     grant, verify хешей, без восстановления credentials/transcripts.
 
-    Fail-closed (VP-7 D-fix): требуется свежий grant, **и** он должен разрешать
-    ``repo_write`` в точном scope (project/repo/base/environment) через
-    :func:`autonomy.evaluate` — не только существование grant. Emergency Stop
-    (§19) запрещает replay как создание нового job."""
+    Fail-closed (VP-7 D-fix, bypass B): scope **выводится из checkpoint и
+    хранимого project/source** (доверенный источник), а НЕ из аргументов каллера.
+    Каллер-supplied repo/base/environment могут только **совпасть/сузить**, но
+    никогда не расширяют scope. Grant должен разрешать ``repo_write`` в этом
+    выведенном scope через :func:`autonomy.evaluate`. Emergency Stop (§19)
+    запрещает replay как создание нового job."""
     cp = _verify_or_raise(checkpoint_id)
 
     # Emergency Stop: replay создаёт новый Run → запрещён при активном стопе.
@@ -194,13 +209,28 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     if not fresh:
         raise TimeMachineError(why, f"replay требует свежий valid grant ({why})")
 
-    # Grant должен явно разрешать repo_write в точном scope (не только «свежий»).
+    # Доверенный scope из checkpoint/project. project_id — из checkpoint; repo —
+    # из хранимого source (github). Grant, привязанный к другому проекту, отвергается.
+    trusted_project = cp.get("project_id") or None
+    trusted_repo = _project_repo(trusted_project)
+    g = autonomy.get_grant(grant_id) or {}
+    if g.get("project_id") and trusted_project and g["project_id"] != trusted_project:
+        raise TimeMachineError("PROJECT_MISMATCH",
+                               "grant привязан к другому проекту, чем checkpoint")
+    # Каллер не может расширить scope: указанный repo/base/env обязан совпасть с
+    # доверенным (если доверенное известно). Иначе — отказ.
+    if repo is not None and trusted_repo and repo != trusted_repo:
+        raise TimeMachineError("REPO_MISMATCH",
+                               "caller repo не совпадает с repo checkpoint/project")
+    eval_repo = trusted_repo or repo  # доверенное имеет приоритет
+
+    # Grant должен явно разрешать repo_write в выведенном scope (не только «свежий»).
     dec = autonomy.evaluate(Capability.REPO_WRITE.value, grant_id=grant_id,
-                            project_id=cp.get("project_id") or None,
-                            repo=repo, base=base, environment=environment)
+                            project_id=trusted_project, repo=eval_repo, base=base,
+                            environment=environment)
     if not dec.permitted:
         raise TimeMachineError(dec.reason_code,
-                               f"replay требует capability repo_write в scope ({dec.reason_code})")
+                               f"replay требует capability repo_write в выведенном scope ({dec.reason_code})")
 
     new_branch = _safe_replay_branch(cp["branch"], checkpoint_id)
     source_head_before = None

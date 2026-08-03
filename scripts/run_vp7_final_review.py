@@ -222,7 +222,7 @@ def main():
                                   str(diff_file), old_findings, evidence_ctx)
         job = JobPackage(goal=prompt, role=Role.REVIEWER, provider=Provider.CODEX,
                          inputs={"cwd": str(_ROOT), "timeout_s": 400})  # cwd = РЕПОЗИТОРИЙ
-        print(f"  [call 5/5] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
+        print(f"  [call 6/6 max] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
         try:
             res = cx.start(job, profile_alias=REVIEWER, root_path=reg["root_path"],
                            executable=reg["executable_path"], run_as_user=reg["runtime_user"])

@@ -197,7 +197,9 @@ class TestGithubAdapter(VP7Base):
         self.bare, self.wc, self.seed = _bare_remote(self._d)
         from atlas_core.github_adapter import GitContract, GitHubAdapter, LocalForge
         self.forge = LocalForge(self.bare, "acme/demo")
-        self.ad = GitHubAdapter(forge=self.forge, contract=GitContract())
+        # enforce_grant=False — явная test-only граница для детерминированных
+        # LocalForge-тестов, НЕ проверяющих grant-энфорсмент (bypass A).
+        self.ad = GitHubAdapter(forge=self.forge, contract=GitContract(), enforce_grant=False)
 
     def _feature(self):
         subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
@@ -265,6 +267,15 @@ class TestGithubAdapter(VP7Base):
             self.ad.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
         self.assertEqual(cm.exception.code, "BUDGET_EXHAUSTED")
 
+    # --- Bypass A: production-адаптер (enforce_grant=True) не может опустить grant ---
+    def test_production_caller_cannot_omit_grant(self):
+        from atlas_core.github_adapter import GitContract, GitContractError, GitHubAdapter
+        prod = GitHubAdapter(forge=self.forge, contract=GitContract())  # enforce_grant=True
+        self._feature()
+        with self.assertRaises(GitContractError) as cm:
+            prod.push_feature(self.wc, "atlas/vp-7-x")  # без grant_id
+        self.assertEqual(cm.exception.code, "GRANT_REQUIRED")
+
 
 # ---------------------------------------------------------------------------
 class TestMergeGate(VP7Base):
@@ -276,8 +287,9 @@ class TestMergeGate(VP7Base):
                          reason="r")
         base = dict(repo="a/b", base="main", branch="atlas/vp-7", head_sha="HEAD1",
                     project_id="p", grant_id=g["id"], environment="synthetic",
-                    review_package={"status": "valid", "head_sha": "HEAD1"},
-                    quality_report={"verdict": "PASS", "blocking_count": 0},
+                    review_package={"id": "rpkg_1", "status": "valid", "head_sha": "HEAD1"},
+                    quality_report={"verdict": "PASS", "blocking_count": 0,
+                                    "review_package_id": "rpkg_1"},
                     checks={"head_sha": "HEAD1", "state": "GREEN"},
                     mergeability={"mergeable": True, "state": "CLEAN"}, pr_number=1)
         base.update(over)
@@ -354,8 +366,8 @@ class TestDeliveryPersistence(VP7Base):
         resp = client.post("/api/v1/github/merge-gate/preview", json={
             "repo": "a/b", "base": "main", "branch": "atlas/vp-7", "head_sha": "HEADX",
             "project_id": "p", "grant_id": g["id"], "environment": "synthetic",
-            "review_package": {"status": "valid", "head_sha": "HEADX"},
-            "quality_report": {"verdict": "PASS", "blocking_count": 0},
+            "review_package": {"id": "rpkg_x", "status": "valid", "head_sha": "HEADX"},
+            "quality_report": {"verdict": "PASS", "blocking_count": 0, "review_package_id": "rpkg_x"},
             "checks": {"head_sha": "HEADX", "state": "GREEN"},
             "mergeability": {"mergeable": True, "state": "CLEAN"}, "pr_number": 5})
         self.assertEqual(resp.status_code, 200)
@@ -460,6 +472,41 @@ class TestTimeMachine(VP7Base):
         with self.assertRaises(TimeMachineError) as cm:
             replay(cp["id"], grant_id=g["id"])
         self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+
+    # --- Bypass B: scope выводится из checkpoint/project, каллер не расширяет ---
+    def test_replay_grant_for_other_project_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt(project_id="projA")
+        # grant привязан к другому проекту → PROJECT_MISMATCH
+        g = create_grant(project_id="projB", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"])
+        self.assertEqual(cm.exception.code, "PROJECT_MISMATCH")
+
+    def test_replay_repo_derived_from_project_not_caller(self):
+        # checkpoint принадлежит github-проекту с repo owner/A; grant разрешает только
+        # owner/B. Каллер, передав repo="owner/B", НЕ может расширить scope → deny.
+        from datetime import datetime, timezone
+
+        from atlas_core.autonomy import create_grant
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Project
+        from atlas_core.timemachine import TimeMachineError, replay
+        now = datetime.now(timezone.utc)
+        with session_scope() as s:
+            s.add(Project(id="pjgh", name="gh", source_kind="github",
+                          source_location="https://github.com/owner/A", source_ref="owner/A",
+                          status="connected", created_at=now, updated_at=now))
+            s.commit()
+        cp = self._ckpt(project_id="pjgh")
+        g = create_grant(project_id="pjgh", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["owner/B"], allowed_bases=["main"], reason="r")
+        # доверенный repo (owner/A) не в allowlist grant (owner/B) → REPO_NOT_ALLOWED
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"], repo="owner/B")
+        self.assertIn(cm.exception.code, ("REPO_NOT_ALLOWED", "REPO_MISMATCH"))
 
     def test_compare_reports_differences(self):
         from atlas_core.timemachine import compare

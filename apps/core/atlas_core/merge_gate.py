@@ -140,18 +140,21 @@ def evaluate_merge(req: MergeRequest, *, correlation_id: str = "") -> MergeGateD
         return _fail(G_BLOCKING, f"blocking={qr.get('blocking_count')}")
     _ok(G_BLOCKING, "blocking=0")
 
-    # 7b. ReviewPackage/QualityReport ДОЛЖНЫ быть привязаны к текущему head SHA.
-    #     Fail-closed (VP-7 D-fix): отсутствующий/несовпадающий head → deny (не
-    #     трактуем «пусто» как «актуально»). QR тоже проверяется, если несёт head.
+    # 7b. ReviewPackage привязан к точному текущему head, а QualityReport — к
+    #     этому ReviewPackage (QR не несёт head_sha, привязка идёт QR→RP→head).
+    #     Fail-closed (VP-7 D-fix): пустой rp.head_sha, пустой rp.id или несовпадение
+    #     QR.review_package_id → deny. «Пусто» ≠ «актуально».
     rp_head = rp.get("head_sha", "")
-    if rp_head != req.head_sha:
+    if not rp_head or rp_head != req.head_sha:
         return _fail(G_STALE_REVIEW,
                      f"rp_head={rp_head[:12] or '(пусто)'} != {req.head_sha[:12]}")
-    qr_head = qr.get("head_sha", "")
-    if qr_head and qr_head != req.head_sha:
+    rp_id = rp.get("id", "")
+    qr_rp = qr.get("review_package_id", "")
+    if not rp_id or not qr_rp or qr_rp != rp_id:
         return _fail(G_STALE_REVIEW,
-                     f"qr_head={qr_head[:12]} != {req.head_sha[:12]}")
-    _ok(G_STALE_REVIEW, f"head={req.head_sha[:12]}")
+                     f"QualityReport не привязан к текущему ReviewPackage "
+                     f"(qr.rp={qr_rp or '(пусто)'} != rp.id={rp_id or '(пусто)'})")
+    _ok(G_STALE_REVIEW, f"head={req.head_sha[:12]} rp={rp_id[:12]}")
 
     # 8. required CI checks зелёные ИМЕННО для текущего head. Fail-closed:
     #    отсутствующий ci.head_sha НЕ подменяется req.head_sha → deny.

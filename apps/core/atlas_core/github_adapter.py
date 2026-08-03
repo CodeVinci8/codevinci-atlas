@@ -372,10 +372,18 @@ class GhForge:
 # --- Высокоуровневый адаптер ------------------------------------------------
 @dataclass
 class GitHubAdapter:
-    """Единый адаптер: git-плоскость + forge (local|gh) + git-контракт §20.3."""
+    """Единый адаптер: git-плоскость + forge (local|gh) + git-контракт §20.3.
+
+    ``enforce_grant`` (по умолчанию **True**): каждая production write/merge-
+    операция ОБЯЗАНА иметь валидный grant (capability+scope+budget). Отсутствие
+    grant → fail-closed ``GRANT_REQUIRED`` (VP-7 D-fix, bypass A). Явный
+    ``enforce_grant=False`` — **только** для детерминированных LocalForge-тестов,
+    которые не проверяют grant-энфорсмент (видимая test-only граница, не
+    production-default обход)."""
 
     forge: LocalForge | GhForge
     contract: GitContract = field(default_factory=GitContract)
+    enforce_grant: bool = True
 
     def auth_status(self) -> dict:
         return self.forge.auth_status()
@@ -384,10 +392,15 @@ class GitHubAdapter:
         return self.forge.repo_metadata()
 
     def _consume(self, grant_id: str, capability: str, correlation_id: str = "") -> None:
-        """Списать invocation-бюджет grant за реальную write/merge-операцию (VP-7
-        D-fix). Fail-closed: исчерпанный/несуществующий grant → GitContractError."""
+        """Проверить grant (capability+scope) и списать invocation-бюджет за
+        реальную write/merge-операцию (VP-7 D-fix). Fail-closed: отсутствующий/
+        исчерпанный/несоответствующий grant → GitContractError."""
         if not grant_id:
-            return  # без grant (детерминированные тесты) — контракт всё равно энфорсится
+            if self.enforce_grant:
+                raise GitContractError(
+                    "GRANT_REQUIRED",
+                    f"операция {capability} требует явный grant (capability+scope+budget)")
+            return  # только явная test-only граница (enforce_grant=False)
         from . import autonomy
         dec = autonomy.evaluate(capability, grant_id=grant_id)
         if not dec.permitted:
