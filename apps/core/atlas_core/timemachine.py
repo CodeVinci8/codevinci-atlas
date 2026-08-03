@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from . import audit, autonomy
+from . import audit, autonomy, emergency
 from .autonomy import Capability
 from .db import session_scope
 from .ids import new_id
@@ -171,17 +171,36 @@ def _safe_replay_branch(source_branch: str, checkpoint_id: str) -> str:
 
 
 def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = None,
-           repo_path: str | None = None, actor: str = "owner",
+           repo_path: str | None = None, repo: str | None = None, base: str | None = None,
+           environment: str | None = None, actor: str = "owner",
            cause: str = "replay", correlation_id: str = "") -> dict:
     """Replay checkpoint: создаёт **новый Run** и **новую безопасную feature-
     ветку**, НЕ переписывая/не сбрасывая source-ветку, НЕ переиспользуя stale
-    grant, verify хешей, без восстановления credentials/transcripts."""
+    grant, verify хешей, без восстановления credentials/transcripts.
+
+    Fail-closed (VP-7 D-fix): требуется свежий grant, **и** он должен разрешать
+    ``repo_write`` в точном scope (project/repo/base/environment) через
+    :func:`autonomy.evaluate` — не только существование grant. Emergency Stop
+    (§19) запрещает replay как создание нового job."""
     cp = _verify_or_raise(checkpoint_id)
+
+    # Emergency Stop: replay создаёт новый Run → запрещён при активном стопе.
+    if emergency.blocks_new_jobs():
+        raise TimeMachineError("EMERGENCY_STOP",
+                               "Emergency Stop активен: replay (новый job) запрещён")
 
     # Никогда не переиспользуем stale grant checkpoint — требуется свежий valid.
     fresh, why = _grant_is_fresh(grant_id)
     if not fresh:
         raise TimeMachineError(why, f"replay требует свежий valid grant ({why})")
+
+    # Grant должен явно разрешать repo_write в точном scope (не только «свежий»).
+    dec = autonomy.evaluate(Capability.REPO_WRITE.value, grant_id=grant_id,
+                            project_id=cp.get("project_id") or None,
+                            repo=repo, base=base, environment=environment)
+    if not dec.permitted:
+        raise TimeMachineError(dec.reason_code,
+                               f"replay требует capability repo_write в scope ({dec.reason_code})")
 
     new_branch = _safe_replay_branch(cp["branch"], checkpoint_id)
     source_head_before = None

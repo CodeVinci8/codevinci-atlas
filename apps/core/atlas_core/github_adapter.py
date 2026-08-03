@@ -383,21 +383,37 @@ class GitHubAdapter:
     def repo_metadata(self) -> dict:
         return self.forge.repo_metadata()
 
+    def _consume(self, grant_id: str, capability: str, correlation_id: str = "") -> None:
+        """Списать invocation-бюджет grant за реальную write/merge-операцию (VP-7
+        D-fix). Fail-closed: исчерпанный/несуществующий grant → GitContractError."""
+        if not grant_id:
+            return  # без grant (детерминированные тесты) — контракт всё равно энфорсится
+        from . import autonomy
+        dec = autonomy.evaluate(capability, grant_id=grant_id)
+        if not dec.permitted:
+            raise GitContractError(dec.reason_code, dec.next_action)
+        try:
+            autonomy.consume_budget(grant_id, n=1, correlation_id=correlation_id)
+        except autonomy.BudgetError as exc:
+            raise GitContractError("BUDGET_EXHAUSTED", str(exc)) from exc
+
     def commit(self, worktree: str, message: str, *, allow_empty: bool = False,
-               correlation_id: str = "") -> str:
+               grant_id: str = "", correlation_id: str = "") -> str:
         audit.record("github.commit.before", f"wt={Path(worktree).name}",
                      correlation_id=correlation_id)
+        self._consume(grant_id, "commit", correlation_id)
         sha = self.contract.commit(worktree, message, allow_empty=allow_empty)
         audit.record("github.commit.after", f"sha={sha[:12]}", correlation_id=correlation_id)
         return sha
 
     def push_feature(self, worktree: str, branch: str, *, remote: str = "origin",
-                     force: bool = False, correlation_id: str = "") -> dict:
+                     force: bool = False, grant_id: str = "", correlation_id: str = "") -> dict:
         """Push feature-ветки. Отказ на protected-ветке/force. Идемпотентно:
-        повторный push того же SHA — success no-op."""
+        повторный push того же SHA — success no-op. С grant_id — списывает бюджет."""
         self.contract.assert_feature_branch(branch)
         if force:
             raise self.contract.reject_force()
+        self._consume(grant_id, "push_feature", correlation_id)
         local_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         audit.record("github.push.before", f"branch={branch} sha={local_sha[:12]}",
                      correlation_id=correlation_id)
@@ -413,11 +429,12 @@ class GitHubAdapter:
         raise self.contract.reject_delete()
 
     def create_pr(self, *, base: str, head_branch: str, head_sha: str, title: str,
-                  body: str, correlation_id: str = "") -> dict:
+                  body: str, grant_id: str = "", correlation_id: str = "") -> dict:
         self.contract.assert_feature_branch(head_branch)
         self.contract.assert_russian(title)
         audit.record("github.pr.before", f"head={head_branch} base={base}",
                      correlation_id=correlation_id)
+        self._consume(grant_id, "create_pr", correlation_id)
         pr = self.forge.open_pr(base=base, head_branch=head_branch, head_sha=head_sha,
                                 title=title, body=body)
         audit.record("github.pr.after", f"pr=#{pr.number} state={pr.state}",
@@ -435,10 +452,11 @@ class GitHubAdapter:
         return self.forge.mergeability(number)
 
     def squash_merge(self, number: int, *, expected_head: str, message: str,
-                     correlation_id: str = "") -> dict:
+                     grant_id: str = "", correlation_id: str = "") -> dict:
         """Squash-merge ТОЛЬКО после решения merge gate (см. merge_gate).
-        Здесь энфорсится stale-head защита и RU-сообщение."""
+        Здесь энфорсится stale-head защита, RU-сообщение и списание бюджета."""
         self.contract.assert_russian(message)
+        self._consume(grant_id, "merge_after_pass", correlation_id)
         name, email = self.contract.expected_author_name, ""
         if isinstance(self.forge, LocalForge):
             try:  # автор squash-коммита в bare-remote — общая идентичность репо-хоста

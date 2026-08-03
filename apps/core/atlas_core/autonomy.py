@@ -70,6 +70,14 @@ BUDGETED_CAPABILITIES: frozenset[str] = frozenset({
     Capability.COMMANDS.value, Capability.DEPS_INSTALL.value,
 })
 
+# Capabilities, затрагивающие конкретный удалённый repo: grant ОБЯЗАН иметь явный
+# scope (allowed_repos/allowed_bases непусты) — иначе fail-closed deny (VP-7 D-fix).
+# «Пустой allowlist» НЕ означает «любой repo». commit — worktree-локальный, не сюда.
+SCOPE_REQUIRED_CAPABILITIES: frozenset[str] = frozenset({
+    Capability.REPO_WRITE.value, Capability.PUSH_FEATURE.value,
+    Capability.CREATE_PR.value, Capability.MERGE_AFTER_PASS.value,
+})
+
 # --- Стабильные reason-коды (fail-closed) ----------------------------------
 R_PERMITTED = "PERMITTED"
 R_NO_GRANT = "NO_GRANT"
@@ -356,17 +364,29 @@ def evaluate(capability: str, *, grant_id: str | None = None, project_id: str | 
         return Decision(False, R_CONFLICT, next_action(R_CONFLICT), grant_id=gid,
                         detail=f"ожидалась версия {expected_version}, актуальная {g['version']}")
 
-    # 5. Scope: repo / base / environment / workspace.
-    if repo is not None and g["allowed_repos"] and repo not in g["allowed_repos"]:
+    # 5a. Scope-required capabilities: grant ОБЯЗАН иметь явный repo/base scope.
+    #     Пустой allowlist → fail-closed deny (не «любой repo»).
+    if capability in SCOPE_REQUIRED_CAPABILITIES:
+        if not g["allowed_repos"]:
+            return Decision(False, R_REPO, next_action(R_REPO), grant_id=gid,
+                            detail="grant без allowed_repos не разрешает repo-действие (fail-closed)")
+        if not g["allowed_bases"]:
+            return Decision(False, R_BASE, next_action(R_BASE), grant_id=gid,
+                            detail="grant без allowed_bases не разрешает repo-действие (fail-closed)")
+
+    # 5b. Scope: repo / base / environment / workspace. Fail-closed — если каллер
+    #     указал значение, оно ДОЛЖНО присутствовать в allowlist (пустой список =
+    #     нет разрешения для этого значения, а не «любой»).
+    if repo is not None and repo not in g["allowed_repos"]:
         return Decision(False, R_REPO, next_action(R_REPO), grant_id=gid,
                         detail=f"repo {repo} вне allowlist")
-    if base is not None and g["allowed_bases"] and base not in g["allowed_bases"]:
+    if base is not None and base not in g["allowed_bases"]:
         return Decision(False, R_BASE, next_action(R_BASE), grant_id=gid,
                         detail=f"base {base} вне allowlist")
-    if environment is not None and g["environment"] and environment != g["environment"]:
+    if environment is not None and environment != g["environment"]:
         return Decision(False, R_ENV, next_action(R_ENV), grant_id=gid,
-                        detail=f"environment {environment} != {g['environment']}")
-    if workspace is not None and g["workspace_allowlist"] and workspace not in g["workspace_allowlist"]:
+                        detail=f"environment {environment} != {g['environment'] or '(пусто)'}")
+    if workspace is not None and workspace not in g["workspace_allowlist"]:
         return Decision(False, R_WORKSPACE, next_action(R_WORKSPACE), grant_id=gid,
                         detail=f"workspace {workspace} вне allowlist")
 

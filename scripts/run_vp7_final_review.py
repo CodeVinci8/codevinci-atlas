@@ -150,6 +150,28 @@ def main():
     injected_findings = json.loads(os.environ.get("VP7_REVIEWER_FINDINGS", "[]"))
     old_findings = json.loads(os.environ.get("VP7_OLD_FINDINGS", "[]"))
 
+    # Изолированная мигрированная 0007-БД для ReviewPackage/QualityReport (НЕ живая).
+    os.environ["ATLAS_CONFIG_FILE"] = "/nonexistent.yaml"
+    dd = tempfile.mkdtemp(prefix="atlas-vp7-final-")
+    os.environ["ATLAS_DATA_DIR"] = dd
+    venv = _ROOT / ".venv" / "bin"
+    mig = sh([str(venv / "alembic"), "upgrade", "head"], cwd=str(_ROOT),
+             env={**os.environ, "PATH": f"{venv}:{os.environ.get('PATH', '')}",
+                  "PYTHONPATH": f"{_ROOT}/apps/core:{_ROOT}/apps/runner"})
+    if mig.returncode != 0:
+        print("  BLOCKER: миграция изолированной БД не удалась. Provider не вызывается.")
+        return {"ok": False, "blocker": "migration failed"}
+    from atlas_core.db import init_engine, session_scope
+    from atlas_core.orm import Project
+    from atlas_core.settings import load_settings
+    settings = load_settings()
+    init_engine(settings.db_url, settings.db_path)
+    with session_scope() as s:
+        if s.get(Project, "proj_vp7") is None:
+            s.add(Project(id="proj_vp7", name="CodeVinci Atlas VP-7", source_kind="github",
+                          source_location=repo, status="connected", created_at=_now(), updated_at=_now()))
+            s.commit()
+
     # Реальный ПОЛНЫЙ diff origin/main...HEAD (merge-base семантика).
     sh(["git", "-C", str(_ROOT), "fetch", "origin", base, "--quiet"])
     files = sh(["git", "-C", str(_ROOT), "diff", "--name-only", f"origin/{base}...{head}"]).stdout.strip().splitlines()

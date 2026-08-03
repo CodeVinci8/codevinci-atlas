@@ -98,6 +98,23 @@ class TestAutonomyGrants(VP7Base):
         self.assertTrue(d.permitted)
         self.assertEqual(d.reason_code, "PERMITTED")
 
+    # --- Fix2: пустой scope НЕ означает «любой repo» (fail-closed) ---
+    def test_empty_scope_repo_capability_denies(self):
+        from atlas_core.autonomy import evaluate
+        # grant с merge_after_pass, но БЕЗ allowed_repos/bases → deny (fail-closed)
+        g = self._grant(capabilities=["merge_after_pass"])
+        self.assertEqual(evaluate("merge_after_pass", grant_id=g["id"]).reason_code, "REPO_NOT_ALLOWED")
+        # даже если каллер указывает repo — пустой allowlist денит
+        self.assertEqual(evaluate("push_feature", grant_id=self._grant(
+            capabilities=["push_feature"])["id"], repo="a/b").reason_code, "REPO_NOT_ALLOWED")
+
+    def test_empty_environment_denies_provided_env(self):
+        from atlas_core.autonomy import evaluate
+        g = self._grant(capabilities=["commit"], allowed_repos=["a/b"], allowed_bases=["main"])
+        # grant без environment → указанный environment должен быть отклонён
+        self.assertEqual(evaluate("commit", grant_id=g["id"], environment="prod").reason_code,
+                         "ENVIRONMENT_MISMATCH")
+
 
 # ---------------------------------------------------------------------------
 class TestEmergencyStop(VP7Base):
@@ -133,6 +150,26 @@ class TestEmergencyStop(VP7Base):
         res = emergency.resume(actor="owner")
         self.assertTrue(res["resumed"])
         self.assertFalse(emergency.is_active())
+
+    # --- Fix1: Emergency Stop блокирует СОЗДАНИЕ новых Run ---
+    def test_blocks_create_run(self):
+        from datetime import datetime, timezone
+
+        from atlas_core import emergency
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Project
+        from atlas_core.runs import RunError, RunService
+        now = datetime.now(timezone.utc)
+        with session_scope() as s:
+            s.add(Project(id="pj", name="p", source_kind="local_git", source_location="/x",
+                          status="connected", created_at=now, updated_at=now))
+            s.commit()
+        runs = RunService()
+        runs.create_run("pj", vp_key="VP-7", dedup_key="ok1")  # до стопа — можно
+        emergency.engage(reason="test")
+        with self.assertRaises(RunError) as cm:
+            runs.create_run("pj", vp_key="VP-7", dedup_key="blocked")
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +249,22 @@ class TestGithubAdapter(VP7Base):
         with self.assertRaises(GitContractError):
             self.ad.squash_merge(pr["number"], expected_head="deadbeef", message="повтор")
 
+    # --- Fix4: реальные write-операции списывают invocation-бюджет grant ---
+    def test_push_consumes_budget_and_exhaustion_blocks(self):
+        from atlas_core.autonomy import create_grant, get_grant
+        from atlas_core.github_adapter import GitContractError
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         budget={"max_invocations": 1}, reason="budget")
+        self._feature()
+        # первый push с grant — списывает 1/1
+        self.ad.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        self.assertEqual(get_grant(g["id"])["budget"]["used_invocations"], 1)
+        # второй push — бюджет исчерпан → отказ
+        with self.assertRaises(GitContractError) as cm:
+            self.ad.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        self.assertEqual(cm.exception.code, "BUDGET_EXHAUSTED")
+
 
 # ---------------------------------------------------------------------------
 class TestMergeGate(VP7Base):
@@ -248,6 +301,25 @@ class TestMergeGate(VP7Base):
         from atlas_core.merge_gate import evaluate_merge
         d = evaluate_merge(self._setup(quality_report={"verdict": "PASS", "blocking_count": 1}))
         self.assertEqual(d.reason_code, "BLOCKING_QUALITY_FINDING")
+
+    # --- Fix3: неполные current-head evidence → fail-closed deny ---
+    def test_missing_review_head_denies(self):
+        from atlas_core.merge_gate import evaluate_merge
+        d = evaluate_merge(self._setup(review_package={"status": "valid"}))  # нет head_sha
+        self.assertEqual(d.reason_code, "STALE_REVIEW_HEAD")
+
+    def test_missing_ci_head_denies(self):
+        from atlas_core.merge_gate import evaluate_merge
+        d = evaluate_merge(self._setup(checks={"state": "GREEN"}))  # нет head_sha
+        self.assertEqual(d.reason_code, "STALE_OR_FAILING_CI")
+
+    def test_scopeless_merge_grant_denies(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import evaluate_merge
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         reason="scopeless")  # НЕТ allowed_repos/bases
+        req = self._setup(grant_id=g["id"])
+        self.assertFalse(evaluate_merge(req).permitted)
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +418,8 @@ class TestTimeMachine(VP7Base):
         head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True,
                               text=True).stdout.strip()
         cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
-        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["push_feature"], reason="r")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
         res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         self.assertTrue(res["new_run_id"])
         self.assertTrue(res["new_branch"].startswith("atlas/replay-"))
@@ -359,10 +432,34 @@ class TestTimeMachine(VP7Base):
         from atlas_core.autonomy import create_grant, revoke_grant
         from atlas_core.timemachine import TimeMachineError, replay
         cp = self._ckpt()
-        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["push_feature"], reason="r")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
         revoke_grant(g["id"], by="owner")
         with self.assertRaises(TimeMachineError):
             replay(cp["id"], grant_id=g["id"])
+
+    # --- Fix5: replay требует capability repo_write в scope (не только «свежий») ---
+    def test_replay_refuses_grant_without_repo_write(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt()
+        # свежий grant, но БЕЗ repo_write capability → replay денит
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_read"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"])
+        self.assertIn(cm.exception.code, ("CAPABILITY_MISSING", "REPO_NOT_ALLOWED"))
+
+    def test_replay_refuses_when_emergency_active(self):
+        from atlas_core import emergency
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt()
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        emergency.engage(reason="test")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"])
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
 
     def test_compare_reports_differences(self):
         from atlas_core.timemachine import compare

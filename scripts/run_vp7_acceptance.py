@@ -199,6 +199,9 @@ class VP7:
         ev["wrong_repo"] = evaluate("commit", grant_id=g_scope["id"], repo="x/y").reason_code
         ev["wrong_base"] = evaluate("commit", grant_id=g_scope["id"], base="dev").reason_code
         ev["wrong_env"] = evaluate("commit", grant_id=g_scope["id"], environment="prod").reason_code
+        # Fix2: пустой scope НЕ означает «любой repo» (fail-closed).
+        g_empty = self._grant(capabilities=["merge_after_pass"])  # без allowed_repos/bases
+        ev["empty_scope"] = evaluate("merge_after_pass", grant_id=g_empty["id"]).reason_code
         g_cap = self._grant(capabilities=["repo_read"])
         ev["missing_cap"] = evaluate("commit", grant_id=g_cap["id"]).reason_code
         g_bud = self._grant(capabilities=["commit"], budget={"max_invocations": 1})
@@ -208,10 +211,10 @@ class VP7:
         self.rec(2, "Нет grant → denied", ev["no_grant"] == "NO_GRANT", ev["no_grant"])
         self.rec(3, "Истёкший grant → denied", ev["expired"] == "GRANT_EXPIRED", ev["expired"])
         self.rec(4, "Отозванный grant → denied", ev["revoked"] == "GRANT_REVOKED", ev["revoked"])
-        self.rec(5, "Неверный repo/base/env → denied",
+        self.rec(5, "Неверный/пустой repo/base/env → denied (fail-closed)",
                  ev["wrong_repo"] == "REPO_NOT_ALLOWED" and ev["wrong_base"] == "BASE_NOT_ALLOWED"
-                 and ev["wrong_env"] == "ENVIRONMENT_MISMATCH",
-                 f"{ev['wrong_repo']}/{ev['wrong_base']}/{ev['wrong_env']}")
+                 and ev["wrong_env"] == "ENVIRONMENT_MISMATCH" and ev["empty_scope"] == "REPO_NOT_ALLOWED",
+                 f"{ev['wrong_repo']}/{ev['wrong_base']}/{ev['wrong_env']}/empty={ev['empty_scope']}")
         self.rec(6, "Отсутствующая capability → denied", ev["missing_cap"] == "CAPABILITY_MISSING",
                  ev["missing_cap"])
         self.rec(7, "Исчерпан бюджет → denied", ev["budget"] == "BUDGET_EXHAUSTED", ev["budget"])
@@ -241,6 +244,13 @@ class VP7:
             s.commit()
         st = emergency.engage(reason="acceptance")
         blocks = emergency.blocks_new_jobs()
+        # Fix1: Emergency Stop блокирует СОЗДАНИЕ нового Run (не только флаг).
+        from atlas_core.runs import RunError, RunService
+        create_blocked = False
+        try:
+            RunService().create_run("proj_v7", vp_key="VP-7", dedup_key="es-blocked")
+        except RunError as exc:
+            create_blocked = exc.code == "EMERGENCY_STOP"
         with session_scope() as s:
             run_state = s.get(Run, "run_es").state
             lease = s.get(RunLease, st["released_leases"][0].split(":")[1])
@@ -251,9 +261,10 @@ class VP7:
         res = emergency.resume(actor="owner")
         cleared_only_after_resume = active_before_resume and not emergency.is_active()
         self.art("c9_12_emergency.json", {"engaged": st, "blocks": blocks,
-                 "run_state": run_state, "lease_released": lease_released,
-                 "survives_restart": survives, "resume": res})
-        self.rec(9, "Emergency Stop блокирует новые jobs", blocks, f"blocks={blocks}")
+                 "create_run_blocked": create_blocked, "run_state": run_state,
+                 "lease_released": lease_released, "survives_restart": survives, "resume": res})
+        self.rec(9, "Emergency Stop блокирует новые jobs (флаг + создание Run)",
+                 blocks and create_blocked, f"blocks={blocks} create_blocked={create_blocked}")
         self.rec(10, "Emergency Stop прерывает active и снимает leases без удаления",
                  run_state == "INTERRUPTED" and lease_released and "run_es" in st["interrupted_runs"],
                  f"run={run_state} lease_released={lease_released}")
@@ -324,19 +335,32 @@ class VP7:
         stale_review = evaluate_merge(mk(review_package={"status": "valid", "head_sha": "OLD"}))
         stale_ci = evaluate_merge(mk(checks={"head_sha": "OLD", "state": "GREEN"}))
         blocking = evaluate_merge(mk(quality_report={"verdict": "PASS", "blocking_count": 1}))
+        # Fix3: неполные current-head evidence → fail-closed deny.
+        missing_rp_head = evaluate_merge(mk(review_package={"status": "valid"}))
+        missing_ci_head = evaluate_merge(mk(checks={"state": "GREEN"}))
+        # Fix2: scopeless grant → deny в merge gate.
+        g_empty = self._grant(capabilities=["merge_after_pass"])
+        scopeless = evaluate_merge(mk(grant_id=g_empty["id"]))
         permit = evaluate_merge(mk())
-        merged = ad.squash_merge(prn, expected_head=sha, message="VP-7: squash после PASS") \
-            if permit.permitted else {"merged": False}
+        merged = ad.squash_merge(prn, expected_head=sha, message="VP-7: squash после PASS",
+                                 grant_id=g["id"]) if permit.permitted else {"merged": False}
         base_advanced = forge.branch_head("main") != self.seed
         self.art("c17_20_merge_gate.json", {
             "stale_review": stale_review.reason_code, "stale_ci": stale_ci.reason_code,
-            "blocking": blocking.reason_code, "permit": permit.reason_code,
-            "merged": merged.get("merged"), "base_advanced": base_advanced,
-            "conditions": permit.conditions})
-        self.rec(17, "Протухший ReviewPackage/PASS денит merge",
-                 stale_review.reason_code == "STALE_REVIEW_HEAD", stale_review.reason_code)
-        self.rec(18, "Протухший CI head денит merge",
-                 stale_ci.reason_code == "STALE_OR_FAILING_CI", stale_ci.reason_code)
+            "blocking": blocking.reason_code, "missing_rp_head": missing_rp_head.reason_code,
+            "missing_ci_head": missing_ci_head.reason_code, "scopeless": scopeless.reason_code,
+            "permit": permit.reason_code, "merged": merged.get("merged"),
+            "base_advanced": base_advanced, "conditions": permit.conditions})
+        self.rec(17, "Протухший/отсутствующий ReviewPackage head денит merge (fail-closed)",
+                 stale_review.reason_code == "STALE_REVIEW_HEAD"
+                 and missing_rp_head.reason_code == "STALE_REVIEW_HEAD"
+                 and not scopeless.permitted,
+                 f"stale={stale_review.reason_code} missing={missing_rp_head.reason_code} "
+                 f"scopeless={scopeless.reason_code}")
+        self.rec(18, "Протухший/отсутствующий CI head денит merge (fail-closed)",
+                 stale_ci.reason_code == "STALE_OR_FAILING_CI"
+                 and missing_ci_head.reason_code == "STALE_OR_FAILING_CI",
+                 f"stale={stale_ci.reason_code} missing={missing_ci_head.reason_code}")
         self.rec(19, "Blocking Quality finding денит merge",
                  blocking.reason_code == "BLOCKING_QUALITY_FINDING", blocking.reason_code)
         self.rec(20, "Current-head PASS + green + grant разрешает bounded merge",
@@ -404,7 +428,8 @@ class VP7:
         head = _git(repo, "rev-parse", "HEAD").stdout.strip()
         cp = create_checkpoint(CheckpointInputs(project_id="proj_v7", vp_key="VP-7",
                                branch="atlas/vp-7-src", base_sha=base, head_sha=head, cause="post"))
-        g = self._grant(mode="AUTONOMOUS", capabilities=["push_feature"])
+        g = self._grant(mode="AUTONOMOUS", capabilities=["repo_write"],
+                        allowed_repos=["proj/v7"], allowed_bases=["main"])
         res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         src_after = _git(repo, "rev-parse", "atlas/vp-7-src").stdout.strip()
         new_ok = _git(repo, "rev-parse", "--verify", res["new_branch"]).returncode == 0

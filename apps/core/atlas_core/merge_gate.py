@@ -140,17 +140,25 @@ def evaluate_merge(req: MergeRequest, *, correlation_id: str = "") -> MergeGateD
         return _fail(G_BLOCKING, f"blocking={qr.get('blocking_count')}")
     _ok(G_BLOCKING, "blocking=0")
 
-    # 7b. ReviewPackage/QualityReport соответствуют текущему head SHA.
+    # 7b. ReviewPackage/QualityReport ДОЛЖНЫ быть привязаны к текущему head SHA.
+    #     Fail-closed (VP-7 D-fix): отсутствующий/несовпадающий head → deny (не
+    #     трактуем «пусто» как «актуально»). QR тоже проверяется, если несёт head.
     rp_head = rp.get("head_sha", "")
-    if rp_head and rp_head != req.head_sha:
-        return _fail(G_STALE_REVIEW, f"rp_head={rp_head[:12]} != {req.head_sha[:12]}")
+    if rp_head != req.head_sha:
+        return _fail(G_STALE_REVIEW,
+                     f"rp_head={rp_head[:12] or '(пусто)'} != {req.head_sha[:12]}")
+    qr_head = qr.get("head_sha", "")
+    if qr_head and qr_head != req.head_sha:
+        return _fail(G_STALE_REVIEW,
+                     f"qr_head={qr_head[:12]} != {req.head_sha[:12]}")
     _ok(G_STALE_REVIEW, f"head={req.head_sha[:12]}")
 
-    # 8. required CI checks зелёные ИМЕННО для текущего head.
+    # 8. required CI checks зелёные ИМЕННО для текущего head. Fail-closed:
+    #    отсутствующий ci.head_sha НЕ подменяется req.head_sha → deny.
     ci = req.checks or {}
-    if ci.get("state") != "GREEN" or ci.get("head_sha", req.head_sha) != req.head_sha:
+    if ci.get("state") != "GREEN" or ci.get("head_sha", "") != req.head_sha:
         return _fail(G_STALE_CI,
-                     f"state={ci.get('state')} ci_head={ci.get('head_sha','')[:12]}")
+                     f"state={ci.get('state')} ci_head={ci.get('head_sha','') [:12] or '(пусто)'}")
     _ok(G_STALE_CI, "checks GREEN на текущем head")
 
     # 9. PR mergeable.
