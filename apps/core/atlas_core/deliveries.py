@@ -9,9 +9,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import OperationalError
 
 from . import audit
 from .db import session_scope
@@ -24,7 +27,10 @@ def _now() -> datetime:
 
 
 def delivery_key(repo: str, base: str, branch: str, head_sha: str) -> str:
-    return f"{repo}@{base}<-{branch}:{head_sha[:12]}"
+    """Каноничный ключ идемпотентности: repo+base+branch+**полный** head SHA
+    (Fix3). Полный SHA исключает коллизии близких head; на этот ключ в схеме есть
+    UNIQUE-индекс, а запись идёт атомарным upsert."""
+    return f"{repo}@{base}<-{branch}:{head_sha}"
 
 
 def record_delivery(*, project_id: str, repo: str, base: str, branch: str, head_sha: str,
@@ -34,40 +40,57 @@ def record_delivery(*, project_id: str, repo: str, base: str, branch: str, head_
                     review_package_id: str = "", quality_report_id: str = "",
                     gate_decision: str = "", gate_reason: str = "", grant_id: str = "",
                     correlation_id: str = "", actor: str = "core") -> dict:
-    """Upsert строки доставки по idempotency_key. Возвращает to_dict()."""
+    """**Атомарный** upsert строки доставки по idempotency_key (Fix3). Один INSERT
+    … ON CONFLICT DO UPDATE вместо SELECT→INSERT — конкурентные одинаковые доставки
+    дают ровно одну durable-строку (UNIQUE-индекс). «Липкие» поля сохраняют старое
+    значение, если новое пустое (COALESCE/NULLIF)."""
     key = delivery_key(repo, base, branch, head_sha)
     now = _now()
-    with session_scope() as s:
-        row = s.execute(select(GithubDelivery)
-                        .where(GithubDelivery.idempotency_key == key)).scalars().first()
-        created = row is None
-        if row is None:
-            row = GithubDelivery(id=new_id("ghd"), idempotency_key=key, created_at=now)
-            s.add(row)
-        row.project_id = project_id
-        row.run_id = run_id or row.run_id
-        row.repo = repo
-        row.base = base
-        row.branch = branch
-        row.head_sha = head_sha
-        if pr_number is not None:
-            row.pr_number = pr_number
-        row.pr_url = pr_url or row.pr_url
-        row.pr_state = pr_state
-        row.checks_state = checks_state
-        row.checks_head_sha = checks_head_sha or head_sha
-        row.mergeable = mergeable
-        row.merge_state = merge_state
-        row.review_package_id = review_package_id or row.review_package_id
-        row.quality_report_id = quality_report_id or row.quality_report_id
-        row.gate_decision = gate_decision or row.gate_decision
-        row.gate_reason = gate_reason or row.gate_reason
-        row.grant_id = grant_id or row.grant_id
-        row.correlation_id = correlation_id or row.correlation_id
-        row.actor = actor
-        row.updated_at = now
-        s.commit()
-        out = row.to_dict()
+    values = dict(
+        id=new_id("ghd"), project_id=project_id, run_id=run_id, repo=repo, base=base,
+        branch=branch, head_sha=head_sha, pr_number=pr_number, pr_url=pr_url,
+        pr_state=pr_state, checks_state=checks_state, checks_head_sha=checks_head_sha or head_sha,
+        mergeable=mergeable, merge_state=merge_state, review_package_id=review_package_id,
+        quality_report_id=quality_report_id, gate_decision=gate_decision, gate_reason=gate_reason,
+        grant_id=grant_id, idempotency_key=key, correlation_id=correlation_id, actor=actor,
+        created_at=now, updated_at=now)
+    ins = sqlite_insert(GithubDelivery).values(**values)
+    ex, T = ins.excluded, GithubDelivery
+
+    def sticky(col_ex, col_tbl):  # сохранить старое, если новое пустое
+        return func.coalesce(func.nullif(col_ex, ""), col_tbl)
+
+    upsert = ins.on_conflict_do_update(
+        index_elements=[T.idempotency_key],
+        set_={
+            "project_id": ex.project_id, "repo": ex.repo, "base": ex.base, "branch": ex.branch,
+            "head_sha": ex.head_sha, "pr_number": func.coalesce(ex.pr_number, T.pr_number),
+            "pr_url": sticky(ex.pr_url, T.pr_url), "pr_state": ex.pr_state,
+            "checks_state": ex.checks_state, "checks_head_sha": ex.checks_head_sha,
+            "mergeable": ex.mergeable, "merge_state": ex.merge_state,
+            "review_package_id": sticky(ex.review_package_id, T.review_package_id),
+            "quality_report_id": sticky(ex.quality_report_id, T.quality_report_id),
+            "gate_decision": sticky(ex.gate_decision, T.gate_decision),
+            "gate_reason": sticky(ex.gate_reason, T.gate_reason),
+            "grant_id": sticky(ex.grant_id, T.grant_id), "run_id": sticky(ex.run_id, T.run_id),
+            "correlation_id": sticky(ex.correlation_id, T.correlation_id),
+            "actor": ex.actor, "updated_at": ex.updated_at,
+        })
+    created = False
+    last_exc: OperationalError | None = None
+    for attempt in range(5):  # bounded retry на кратковременный SQLite lock
+        try:
+            with session_scope() as s:
+                created = s.execute(select(T.id).where(T.idempotency_key == key)).first() is None
+                s.execute(upsert)
+                s.commit()
+                out = s.execute(select(T).where(T.idempotency_key == key)).scalars().first().to_dict()
+            break
+        except OperationalError as exc:  # database is locked — повторить
+            last_exc = exc
+            time.sleep(0.05 * (attempt + 1))
+    else:
+        raise last_exc  # noqa: RSE102
     audit.record("github.delivery.recorded" if created else "github.delivery.updated",
                  f"repo={repo} branch={branch} head={head_sha[:12]} gate={gate_decision}",
                  actor=actor, correlation_id=correlation_id)

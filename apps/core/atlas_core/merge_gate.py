@@ -241,3 +241,71 @@ def evaluate_merge_authoritative(
         checks=checks or {}, mergeability=mergeability or {}, baseline_known=baseline_known,
         diff_in_scope=diff_in_scope, owner_gate_pending=owner_gate_pending,
         pr_number=pr_number), correlation_id=correlation_id)
+
+
+def authorize_merge_execution(*, forge, repo: str, project_id: str, review_package_id: str,
+                              quality_report_id: str, pr_number: int, expected_head: str,
+                              grant_id: str, base: str = "", environment: str = "",
+                              correlation_id: str = "") -> MergeGateDecision:
+    """Авторизация merge для ФАКТИЧЕСКОГО исполнения (§20.2, execution boundary, §2/Fix1).
+
+    Исполнение неотделимо от проверки. RP и **точный** QR грузятся из хранилища
+    Atlas по id; CI, head и mergeability берутся **из forge непосредственно**, а не
+    из caller-словаря. Требуются точные непустые ``project_id``/``review_package_id``/
+    ``quality_report_id``/``expected_head``. Возвращает :class:`MergeGateDecision`;
+    фактический squash исполняет только :meth:`GitHubAdapter.merge_pull_request`
+    после положительного решения и повторной TOCTOU-проверки head.
+    """
+    from . import reviewpkg
+    from .quality import QualityService
+
+    def _deny(code: str, detail: str) -> MergeGateDecision:
+        audit.record("merge.exec.deny", f"code={code} pr=#{pr_number} head={expected_head[:12]}",
+                     correlation_id=correlation_id)
+        return MergeGateDecision(False, code, next_action(code),
+                                 [{"code": code, "ok": False, "detail": detail}])
+
+    # 0. Точные непустые входы (никаких «latest», никаких дефолтов).
+    if not (project_id and review_package_id and quality_report_id and expected_head):
+        return _deny(G_STALE_REVIEW,
+                     "нужны точные project_id/review_package_id/quality_report_id/expected_head")
+
+    # 1. ReviewPackage из хранилища + ре-валидация по факту (head==expected_head).
+    rp = reviewpkg.get_review_package(review_package_id)
+    if rp is None:
+        return _deny(G_INVALID_REVIEW, "ReviewPackage не найден в хранилище")
+    valid, code, _reason = reviewpkg.validate_review_package(
+        review_package_id, reviewpkg.ReviewFacts(current_head=expected_head))
+    rp = reviewpkg.get_review_package(review_package_id)
+    if not valid:
+        return _deny(G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}")
+    if rp.get("head_sha") != expected_head:
+        return _deny(G_STALE_REVIEW, "ReviewPackage.head_sha != expected_head")
+
+    # 2. Точный QualityReport по id (НЕ latest) + привязка к RP + genuine PASS.
+    qr = QualityService().get_report(quality_report_id)
+    if qr is None:
+        return _deny(G_NOT_PASS, "QualityReport не найден по id")
+    if qr.get("review_package_id") != rp["id"]:
+        return _deny(G_STALE_REVIEW, "QualityReport не привязан к ReviewPackage")
+    if qr.get("verdict") != "PASS":
+        return _deny(G_NOT_PASS, f"verdict={qr.get('verdict')}")
+    if int(qr.get("blocking_count", 0) or 0) > 0:
+        return _deny(G_BLOCKING, f"blocking={qr.get('blocking_count')}")
+
+    # 3. Живое состояние из forge (НЕ caller-словарь): PR head, checks, mergeability.
+    pr = forge.get_pr(pr_number)
+    if pr is None or pr.state != "OPEN":
+        return _deny(G_NOT_MERGEABLE, f"PR #{pr_number} не найден/не OPEN")
+    if pr.head_sha != expected_head:
+        return _deny(G_STALE_REVIEW, f"живой PR head {pr.head_sha[:12]} != expected {expected_head[:12]}")
+    live_checks = forge.checks(expected_head)
+    live_merge = forge.mergeability(pr_number)
+
+    # 4. Полный 11-условный gate по авторитетным RP/QR + ЖИВЫМ checks/mergeability.
+    return evaluate_merge(MergeRequest(
+        repo=repo, base=base or pr.base, branch=pr.head_branch, head_sha=expected_head,
+        project_id=project_id, grant_id=grant_id, environment=environment,
+        review_package=rp, quality_report=qr, checks=live_checks, mergeability=live_merge,
+        baseline_known=True, diff_in_scope=True, owner_gate_pending=False,
+        pr_number=pr_number), correlation_id=correlation_id)

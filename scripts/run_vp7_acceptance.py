@@ -149,7 +149,7 @@ class VP7:
             self.c9_12_emergency()
             self.c13_16_github()
             self.c17_20_merge_gate()
-            self.c34_authoritative_merge()
+            self.c34_authoritative_merge_execution()
             self.c21_audit()
             self.c22_23_checkpoint()
             self.c24_replay()
@@ -358,15 +358,16 @@ class VP7:
         g_empty = self._grant(capabilities=["merge_after_pass"])
         scopeless = evaluate_merge(mk(grant_id=g_empty["id"]))
         permit = evaluate_merge(mk())
-        merged = ad.squash_merge(prn, expected_head=sha, message="VP-7: squash после PASS",
-                                 grant_id=g["id"]) if permit.permitted else {"merged": False}
-        base_advanced = forge.branch_head("main") != self.seed
+        # Проект-биндинг (Fix2): grant другого проекта не проходит даже при совпадении repo/base.
+        g_other = self._grant(project_id="proj_other", allowed_repos=["acme/demo"],
+                              allowed_bases=["main"], environment="synthetic")
+        cross_project = evaluate_merge(mk(grant_id=g_other["id"]))
         self.art("c17_20_merge_gate.json", {
             "stale_review": stale_review.reason_code, "stale_ci": stale_ci.reason_code,
             "blocking": blocking.reason_code, "missing_rp_head": missing_rp_head.reason_code,
             "missing_ci_head": missing_ci_head.reason_code, "scopeless": scopeless.reason_code,
-            "permit": permit.reason_code, "merged": merged.get("merged"),
-            "base_advanced": base_advanced, "conditions": permit.conditions})
+            "permit": permit.reason_code, "cross_project": cross_project.reason_code,
+            "conditions": permit.conditions})
         self.rec(17, "Протухший/отсутствующий ReviewPackage head денит merge (fail-closed)",
                  stale_review.reason_code == "STALE_REVIEW_HEAD"
                  and missing_rp_head.reason_code == "STALE_REVIEW_HEAD"
@@ -377,18 +378,20 @@ class VP7:
                  stale_ci.reason_code == "STALE_OR_FAILING_CI"
                  and missing_ci_head.reason_code == "STALE_OR_FAILING_CI",
                  f"stale={stale_ci.reason_code} missing={missing_ci_head.reason_code}")
-        self.rec(19, "Blocking Quality finding денит merge",
-                 blocking.reason_code == "BLOCKING_QUALITY_FINDING", blocking.reason_code)
-        self.rec(20, "Current-head PASS + green + grant разрешает bounded merge",
-                 permit.permitted and merged.get("merged") and base_advanced,
-                 f"permit={permit.permitted} merged={merged.get('merged')}")
+        self.rec(19, "Blocking Quality finding + grant чужого проекта денят merge",
+                 blocking.reason_code == "BLOCKING_QUALITY_FINDING"
+                 and not cross_project.permitted,
+                 f"blocking={blocking.reason_code} cross_project={cross_project.reason_code}")
+        self.rec(20, "Current-head PASS + green + grant этого проекта разрешает решение merge",
+                 permit.permitted, f"permit={permit.reason_code}")
 
-    # ---- #34 авторитетный merge грузит RP/QR из хранилища (bypass C) ------
-    def c34_authoritative_merge(self):
-        from atlas_core.merge_gate import evaluate_merge_authoritative
+    # ---- #34 ИСПОЛНЕНИЕ merge только через авторитетный путь (Fix1) --------
+    def c34_authoritative_merge_execution(self):
+        from atlas_core.github_adapter import GitContractError, GitHubAdapter
         from atlas_core.quality import QualityService
         from atlas_core.reviewpkg import ReviewInputs, build_review_package
-        g = self._grant(environment="synthetic", allowed_repos=["acme/demo"], allowed_bases=["main"])
+        forge, _ad0, sha, prn = self._gh_state
+        forge.set_checks(sha, "GREEN")
 
         def _rp_qr(head, verdict):
             pkg = build_review_package(ReviewInputs(
@@ -396,32 +399,52 @@ class VP7:
                 branch="atlas/vp-7-a", base_sha="B", head_sha=head, impact_class="LOCAL",
                 claims=[{"claim": "c", "verified": True}]), actor="reviewer")
             rep = QualityService().build_report(pkg, verdict, "", [], run_id="run_auth")
-            return pkg, rep
+            return pkg["id"], rep["id"]
 
-        def _call(rp_id, head="HEADA", qr_id=""):
-            return evaluate_merge_authoritative(
-                repo="acme/demo", base="main", branch="atlas/vp-7-a", head_sha=head,
-                project_id="proj_v7", grant_id=g["id"], review_package_id=rp_id,
-                quality_report_id=qr_id, environment="synthetic",
-                checks={"head_sha": head, "state": "GREEN"},
-                mergeability={"mergeable": True, "state": "CLEAN"}, pr_number=1)
+        pass_rp, pass_qr = _rp_qr(sha, "PASS")
+        revise_rp, revise_qr = _rp_qr(sha, "REVISE")
+        stale_rp, stale_qr = _rp_qr("OLDHEAD", "PASS")
+        # отдельный RP для toctou: validate durable-инвалидирует пакет при mismatch head.
+        toctou_rp, toctou_qr = _rp_qr(sha, "PASS")
+        # production-адаптер, привязанный к проекту proj_v7 (enforce_grant=True)
+        ex = GitHubAdapter(forge=forge, project_id="proj_v7")
+        g = self._grant(environment="synthetic", allowed_repos=["acme/demo"], allowed_bases=["main"])
+        g_other = self._grant(project_id="proj_other", allowed_repos=["acme/demo"],
+                              allowed_bases=["main"], environment="synthetic")
 
-        ok_pkg, ok_rep = _rp_qr("HEADA", "PASS")
-        permit = _call(ok_pkg["id"], qr_id=ok_rep["id"])            # валидный stored → permit
-        stale_pkg, stale_rep = _rp_qr("OLD", "PASS")
-        stale = _call(stale_pkg["id"], head="HEADA", qr_id=stale_rep["id"])  # stored stale → deny
-        missing = _call("rpkg_nope")                                 # нет в хранилище → deny
-        empty = _call("")                                            # пустой id → deny
-        mism = _call(ok_pkg["id"], qr_id="qrep_wrong")               # caller qr_id ≠ stored → deny
+        def _try_merge(*, rp, qr, head=sha, grant=None):
+            try:
+                ex.merge_pull_request(project_id="proj_v7", review_package_id=rp,
+                                      quality_report_id=qr, pr_number=prn, expected_head=head,
+                                      grant_id=grant or g["id"], base="main",
+                                      environment="synthetic",
+                                      message="VP-7: попытка squash")
+                return "MERGED"
+            except GitContractError as exc:
+                return exc.code
+
+        # НЕГАТИВНЫЕ: ни один не должен исполнить merge (PR остаётся OPEN).
+        no_qr = _try_merge(rp=pass_rp, qr="qrep_wrong")          # QR не найден
+        revise = _try_merge(rp=revise_rp, qr=revise_qr)          # verdict REVISE
+        stale = _try_merge(rp=stale_rp, qr=stale_qr)             # RP head != текущий
+        toctou = _try_merge(rp=toctou_rp, qr=toctou_qr, head="deadbeef")  # stale expected_head
+        cross = _try_merge(rp=pass_rp, qr=pass_qr, grant=g_other["id"])  # grant чужого проекта
+        base_before = forge.branch_head("main")
+        not_merged_yet = base_before == self.seed
+        # ПОЗИТИВНЫЙ (последним): PASS + green + grant проекта → фактический merge.
+        merged = _try_merge(rp=pass_rp, qr=pass_qr)
+        base_advanced = forge.branch_head("main") != self.seed
+        # раз PR смёржен — повторный merge того же PR больше не проходит
+        after_merged = _try_merge(rp=pass_rp, qr=pass_qr)
         self.art("c34_authoritative_merge.json", {
-            "permit": permit.reason_code, "stale": stale.reason_code,
-            "missing": missing.reason_code, "empty": empty.reason_code,
-            "mismatch": mism.reason_code})
-        self.rec(34, "Авторитетный merge грузит RP/QR из хранилища (caller-id недостаточно)",
-                 permit.permitted and not stale.permitted and stale.reason_code == "REVIEW_PACKAGE_INVALID"
-                 and missing.reason_code == "REVIEW_PACKAGE_INVALID" and not empty.permitted
-                 and not mism.permitted,
-                 f"permit={permit.permitted} stale={stale.reason_code} mismatch={mism.reason_code}")
+            "no_qr": no_qr, "revise": revise, "stale": stale, "toctou": toctou,
+            "cross_project": cross, "not_merged_before_pass": not_merged_yet,
+            "merged": merged, "base_advanced": base_advanced, "after_merged": after_merged})
+        self.rec(34, "Merge исполняется ТОЛЬКО через авторитетный путь (Fix1: PASS+RP/QR+live-forge)",
+                 no_qr != "MERGED" and revise == "REVIEWER_NOT_PASS" and stale != "MERGED"
+                 and toctou != "MERGED" and cross == "GRANT_DENIED" and not_merged_yet
+                 and merged == "MERGED" and base_advanced and after_merged != "MERGED",
+                 f"revise={revise} cross={cross} merged={merged} base_advanced={base_advanced}")
 
     # ---- #21 audit completeness ------------------------------------------
     def c21_audit(self):

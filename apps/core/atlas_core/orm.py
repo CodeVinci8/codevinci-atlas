@@ -1449,7 +1449,8 @@ class GithubDelivery(Base):
     gate_decision: Mapped[str] = mapped_column(String(20), default="")  # PERMIT|DENY
     gate_reason: Mapped[str] = mapped_column(String(60), default="")
     grant_id: Mapped[str] = mapped_column(String(40), default="")
-    idempotency_key: Mapped[str] = mapped_column(String(120), default="", index=True)
+    # UNIQUE idempotency_key (Fix3): полный repo+base+branch+head, атомарный upsert.
+    idempotency_key: Mapped[str] = mapped_column(String(200), default="", unique=True, index=True)
     correlation_id: Mapped[str] = mapped_column(String(64), default="")
     actor: Mapped[str] = mapped_column(String(80), default="core")
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)

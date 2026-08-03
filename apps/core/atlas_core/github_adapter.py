@@ -384,6 +384,7 @@ class GitHubAdapter:
     forge: LocalForge | GhForge
     contract: GitContract = field(default_factory=GitContract)
     enforce_grant: bool = True
+    project_id: str = ""   # доверенный persisted project, к которому привязан адаптер
 
     def __post_init__(self) -> None:
         # Bypass A (fail-closed на этапе конструирования): реальный GhForge
@@ -414,11 +415,12 @@ class GitHubAdapter:
 
     def _consume(self, grant_id: str, capability: str, correlation_id: str = "",
                  *, repo: str | None = None, base: str | None = None) -> None:
-        """Проверить grant (capability + **точный scope** repo/base) и списать
-        invocation-бюджет за реальную write/merge-операцию (VP-7 D-fix). Fail-
-        closed: отсутствующий/исчерпанный/несоответствующий grant → GitContractError.
-        Scope repo/base передаётся в :func:`autonomy.evaluate`, поэтому grant,
-        не покрывающий этот repo/base, отвергается (не только «капабилити есть»)."""
+        """Проверить grant (**авторитетный project** + capability + **точный scope**
+        repo/base) и списать invocation-бюджет за реальную write/merge-операцию
+        (VP-7 D-fix + Fix2). Fail-closed: отсутствующий/исчерпанный/несоответствующий
+        grant → GitContractError. project_id адаптера передаётся в
+        :func:`autonomy.evaluate`, поэтому grant чужого/непривязанного проекта
+        отвергается (PROJECT_MISMATCH/PROJECT_UNBOUND), а не только по repo/капабилити."""
         if not grant_id:
             if self.enforce_grant:
                 raise GitContractError(
@@ -426,7 +428,8 @@ class GitHubAdapter:
                     f"операция {capability} требует явный grant (capability+scope+budget)")
             return  # только явная test-only граница (enforce_grant=False)
         from . import autonomy
-        dec = autonomy.evaluate(capability, grant_id=grant_id, repo=repo, base=base)
+        dec = autonomy.evaluate(capability, grant_id=grant_id,
+                                project_id=(self.project_id or None), repo=repo, base=base)
         if not dec.permitted:
             raise GitContractError(dec.reason_code, dec.next_action)
         try:
@@ -488,25 +491,54 @@ class GitHubAdapter:
     def mergeability(self, number: int) -> dict:
         return self.forge.mergeability(number)
 
-    def squash_merge(self, number: int, *, expected_head: str, message: str,
-                     grant_id: str = "", correlation_id: str = "") -> dict:
-        """Squash-merge ТОЛЬКО после решения merge gate (см. merge_gate).
-        Здесь энфорсится stale-head защита, RU-сообщение и списание бюджета."""
-        self.contract.assert_russian(message)
-        pr_for_scope = self.forge.get_pr(number)
+    def merge_pull_request(self, *, project_id: str, review_package_id: str,
+                           quality_report_id: str, pr_number: int, expected_head: str,
+                           grant_id: str, base: str = "", environment: str = "",
+                           message: str = "", correlation_id: str = "") -> dict:
+        """**Единственный** production-путь squash-merge (Fix1, §20.2). Исполнение
+        неотделимо от авторитетной проверки: RP/QR грузятся из хранилища, а CI/head/
+        mergeability берутся из forge (не из caller-словаря). Сырого
+        ``squash_merge(grant_id, expected_head)`` больше нет — обойти gate нельзя.
+
+        Порядок: authorize_merge_execution (RP/QR/PASS/head/CI/mergeable) → RU-message
+        + grant consume (project+repo+base scope) → **TOCTOU**: перечитать live head
+        прямо перед merge → raw forge squash. Любой сбой условия → GitContractError,
+        merge НЕ исполняется."""
+        from .merge_gate import authorize_merge_execution
+        eff_project = project_id or self.project_id
+        auth = authorize_merge_execution(
+            forge=self.forge, repo=self._forge_repo() or "", project_id=eff_project,
+            review_package_id=review_package_id, quality_report_id=quality_report_id,
+            pr_number=pr_number, expected_head=expected_head, grant_id=grant_id,
+            base=base, environment=environment, correlation_id=correlation_id)
+        if not auth.permitted:
+            audit.record("github.merge.denied",
+                         f"pr=#{pr_number} code={auth.reason_code} head={expected_head[:12]}",
+                         correlation_id=correlation_id)
+            raise GitContractError(auth.reason_code, auth.next_action)
+
+        msg = message or f"VP-7: squash-merge PR #{pr_number} после авторитетного PASS"
+        self.contract.assert_russian(msg)
+        # Списание бюджета через привязанный проект (Fix2) + точный repo/base scope.
+        pr = self.forge.get_pr(pr_number)
         self._consume(grant_id, "merge_after_pass", correlation_id,
-                      repo=self._forge_repo(),
-                      base=(pr_for_scope.base if pr_for_scope else None))
+                      repo=self._forge_repo(), base=(base or (pr.base if pr else None)))
+
         name, email = self.contract.expected_author_name, ""
         if isinstance(self.forge, LocalForge):
             try:  # автор squash-коммита в bare-remote — общая идентичность репо-хоста
                 name, email = configured_identity(str(Path(self.forge.bare).parent))
             except Exception:  # noqa: BLE001
                 pass
-        audit.record("github.merge.before", f"pr=#{number} head={expected_head[:12]}",
+        # TOCTOU: перечитать live head непосредственно перед исполнением.
+        fresh = self.forge.get_pr(pr_number)
+        if fresh is None or fresh.state != "OPEN" or fresh.head_sha != expected_head:
+            raise GitContractError("STALE_HEAD_AT_MERGE",
+                                   f"head изменился перед merge (ожидался {expected_head[:12]})")
+        audit.record("github.merge.before", f"pr=#{pr_number} head={expected_head[:12]}",
                      correlation_id=correlation_id)
-        res = self.forge.squash_merge(number, expected_head=expected_head, message=message,
+        res = self.forge.squash_merge(pr_number, expected_head=expected_head, message=msg,
                                       author_name=name or "CodeVinci", author_email=email or "")
-        audit.record("github.merge.after", f"pr=#{number} merged={res.get('merged')}",
+        audit.record("github.merge.after", f"pr=#{pr_number} merged={res.get('merged')}",
                      correlation_id=correlation_id)
-        return res
+        return {**res, "authorization": auth.reason_code}

@@ -83,6 +83,8 @@ R_PERMITTED = "PERMITTED"
 R_NO_GRANT = "NO_GRANT"
 R_EXPIRED = "GRANT_EXPIRED"
 R_REVOKED = "GRANT_REVOKED"
+R_PROJECT_MISMATCH = "PROJECT_MISMATCH"
+R_PROJECT_UNBOUND = "PROJECT_UNBOUND"
 R_REPO = "REPO_NOT_ALLOWED"
 R_BASE = "BASE_NOT_ALLOWED"
 R_ENV = "ENVIRONMENT_MISMATCH"
@@ -98,6 +100,8 @@ _NEXT_ACTION: dict[str, str] = {
     R_NO_GRANT: "Создайте grant с нужным режимом и capability для этого проекта.",
     R_EXPIRED: "Grant истёк — выпустите новый grant с актуальным сроком.",
     R_REVOKED: "Grant отозван — выпустите новый grant, если действие ещё нужно.",
+    R_PROJECT_MISMATCH: "Grant привязан к другому проекту — используйте grant этого проекта.",
+    R_PROJECT_UNBOUND: "Grant без project_id недопустим для операции проекта — выпустите привязанный grant.",
     R_REPO: "Добавьте репозиторий в allowlist grant или выберите разрешённый.",
     R_BASE: "Добавьте базовую ветку в allowlist grant или выберите разрешённую.",
     R_ENV: "Согласуйте environment действия с environment grant.",
@@ -315,8 +319,10 @@ def evaluate(capability: str, *, grant_id: str | None = None, project_id: str | 
     reason-кодом и точным next action.
 
     Порядок: hard-denied capability → grant существует/активен/не истёк →
-    optimistic version → repo/base/env/workspace scope → capability в grant →
-    budget. Любой сбой → deny (никогда не «permit по умолчанию»)."""
+    optimistic version → **project binding** → repo/base/env/workspace scope →
+    capability в grant → budget. Любой сбой → deny (никогда не «permit по
+    умолчанию»). Если передан ``project_id``, grant обязан быть привязан к нему
+    (совпадение repo/base/env не компенсирует несовпадение проекта)."""
     now = now or _utcnow()
 
     # 1. Жёстко недоступные в VP-7 capabilities — независимо от grant (§40 Out).
@@ -363,6 +369,19 @@ def evaluate(capability: str, *, grant_id: str | None = None, project_id: str | 
     if expected_version is not None and g["version"] != expected_version:
         return Decision(False, R_CONFLICT, next_action(R_CONFLICT), grant_id=gid,
                         detail=f"ожидалась версия {expected_version}, актуальная {g['version']}")
+
+    # 4b. Project binding (fail-closed): если у операции есть авторитетный project_id,
+    #     grant ОБЯЗАН быть привязан именно к нему. Совпадение repo/base/env НЕ
+    #     компенсирует несовпадение проекта. Проверяется и в auto-select, и при
+    #     явном grant_id (иначе явный grant чужого проекта прошёл бы).
+    if project_id is not None:
+        if not g["project_id"]:
+            return Decision(False, R_PROJECT_UNBOUND, next_action(R_PROJECT_UNBOUND),
+                            grant_id=gid, detail="grant без project_id для операции проекта")
+        if g["project_id"] != project_id:
+            return Decision(False, R_PROJECT_MISMATCH, next_action(R_PROJECT_MISMATCH),
+                            grant_id=gid,
+                            detail=f"grant проекта {g['project_id']} != {project_id}")
 
     # 5a. Scope-required capabilities: grant ОБЯЗАН иметь явный repo/base scope.
     #     Пустой allowlist → fail-closed deny (не «любой repo»).

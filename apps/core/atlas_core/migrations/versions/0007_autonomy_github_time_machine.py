@@ -133,7 +133,8 @@ def upgrade() -> None:
         sa.Column("gate_decision", sa.String(length=20), nullable=False, server_default=""),
         sa.Column("gate_reason", sa.String(length=60), nullable=False, server_default=""),
         sa.Column("grant_id", sa.String(length=40), nullable=False, server_default=""),
-        sa.Column("idempotency_key", sa.String(length=120), nullable=False, server_default=""),
+        # Fix3: полный ключ идемпотентности (repo+base+branch+head) + UNIQUE-индекс.
+        sa.Column("idempotency_key", sa.String(length=200), nullable=False, server_default=""),
         sa.Column("correlation_id", sa.String(length=64), nullable=False, server_default=""),
         sa.Column("actor", sa.String(length=80), nullable=False, server_default="core"),
         sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -141,7 +142,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_github_deliveries_project_id", "github_deliveries", ["project_id"])
     op.create_index("ix_github_deliveries_repo", "github_deliveries", ["repo"])
-    op.create_index("ix_github_deliveries_idempotency_key", "github_deliveries", ["idempotency_key"])
+    op.create_index("ux_github_deliveries_idempotency_key", "github_deliveries",
+                    ["idempotency_key"], unique=True)
     op.create_index("ix_github_deliveries_created_at", "github_deliveries", ["created_at"])
 
     # --- profile_health.source (provenance auth-health, VP-7) --------------
@@ -152,7 +154,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("profile_health") as b:
         b.drop_column("source")
-    for idx in ("ix_github_deliveries_created_at", "ix_github_deliveries_idempotency_key",
+    for idx in ("ix_github_deliveries_created_at", "ux_github_deliveries_idempotency_key",
                 "ix_github_deliveries_repo", "ix_github_deliveries_project_id"):
         op.drop_index(idx, table_name="github_deliveries")
     op.drop_table("github_deliveries")

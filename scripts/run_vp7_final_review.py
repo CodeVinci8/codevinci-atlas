@@ -247,25 +247,42 @@ def main():
     pkg, outcome = _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat)
     print(f"  Quality verdict: {outcome.verdict} gate={outcome.gate_fired}")
 
-    # реальный STANDARD merge gate — АВТОРИТЕТНЫЙ путь: RP/QR грузятся из хранилища
-    # по id (не из caller-словаря), §2.C. Совпадения id недостаточно для merge.
+    # PRODUCTION merge-путь (Fix1): единственный GitHubAdapter.merge_pull_request через
+    # реальный GhForge. Решение authorize_merge_execution грузит RP/QR из хранилища и
+    # берёт CI/head/mergeability ИЗ forge (live gh), не из caller-словаря. Фактический
+    # merge исполняется ТОЛЬКО при genuine PASS и только с VP7_EXECUTE_MERGE=1.
     from atlas_core.autonomy import create_grant
-    from atlas_core.merge_gate import evaluate_merge_authoritative
+    from atlas_core.github_adapter import GhForge, GitHubAdapter
+    from atlas_core.merge_gate import authorize_merge_execution
     grant = create_grant(project_id="proj_vp7", mode="STANDARD",
                          capabilities=["repo_read", "commit", "push_feature", "create_pr", "merge_after_pass"],
                          environment="atlas-main", allowed_repos=[repo], allowed_bases=[base],
+                         budget={"max_invocations": 1},
                          reason="Закрытие VP-7: bounded squash-merge после current-head PASS.")
+    adapter = GitHubAdapter(forge=GhForge(repo), project_id="proj_vp7")  # enforce_grant=True
+    gate = authorize_merge_execution(
+        forge=adapter.forge, repo=repo, project_id="proj_vp7",
+        review_package_id=pkg["id"], quality_report_id=outcome.report["id"],
+        pr_number=pr, expected_head=head, grant_id=grant["id"], base=base,
+        environment="atlas-main")
     checks = gh_checks_state(repo, head)
     merge = gh_mergeability(repo, pr)
-    gate = evaluate_merge_authoritative(
-        repo=repo, base=base, branch="atlas/vp-7-autonomy-github-time-machine", head_sha=head,
-        project_id="proj_vp7", grant_id=grant["id"], environment="atlas-main",
-        review_package_id=pkg["id"], quality_report_id=outcome.report["id"],
-        checks=checks, mergeability=merge, baseline_known=True, diff_in_scope=True,
-        owner_gate_pending=False, pr_number=pr)
-    print(f"  Merge gate (authoritative, RP/QR из хранилища): {gate.reason_code} permitted={gate.permitted}")
+    print(f"  Merge gate (authoritative execution boundary): {gate.reason_code} permitted={gate.permitted}")
+
+    merged_result = None
+    genuine_pass = (verdict_reviewer == "PASS" and outcome.verdict == "PASS" and gate.permitted)
+    if genuine_pass and os.environ.get("VP7_EXECUTE_MERGE") == "1":
+        print("  [PASS] исполняю production merge PR #13 через merge_pull_request…")
+        merged_result = adapter.merge_pull_request(
+            project_id="proj_vp7", review_package_id=pkg["id"],
+            quality_report_id=outcome.report["id"], pr_number=pr, expected_head=head,
+            grant_id=grant["id"], base=base, environment="atlas-main",
+            message="VP-7: squash-merge после независимого current-head PASS")
+        print(f"  MERGED: {merged_result}")
 
     evidence = {
+        "merge_executed": merged_result is not None,
+        "merge_result": merged_result,
         "repo": repo, "base": base, "head_sha": head, "pr": pr,
         "diff": {"files": len(files), "insertions": ins, "deletions": dele, "diff_bytes": len(full_diff)},
         "reviewer_profile": REVIEWER, "reviewer_independent": True, "reviewer_cwd": str(_ROOT),

@@ -115,6 +115,30 @@ class TestAutonomyGrants(VP7Base):
         self.assertEqual(evaluate("commit", grant_id=g["id"], environment="prod").reason_code,
                          "ENVIRONMENT_MISMATCH")
 
+    # --- Fix2: явный grant не может авторизовать операцию другого проекта ---
+    def test_explicit_grant_other_project_denies(self):
+        from atlas_core.autonomy import evaluate
+        g = self._grant(project_id="projA", capabilities=["merge_after_pass"],
+                        environment="synthetic", allowed_repos=["a/b"], allowed_bases=["main"])
+        # совпадение repo/base/env НЕ компенсирует несовпадение проекта
+        d = evaluate("merge_after_pass", grant_id=g["id"], project_id="projB",
+                     repo="a/b", base="main", environment="synthetic")
+        self.assertEqual(d.reason_code, "PROJECT_MISMATCH")
+
+    def test_unbound_grant_denies_for_project_operation(self):
+        from atlas_core.autonomy import create_grant, evaluate
+        g = create_grant(project_id="", mode="STANDARD", capabilities=["commit"], reason="unbound")
+        self.assertEqual(evaluate("commit", grant_id=g["id"], project_id="projB").reason_code,
+                         "PROJECT_UNBOUND")
+
+    def test_matching_project_permits(self):
+        from atlas_core.autonomy import evaluate
+        g = self._grant(project_id="projA", capabilities=["merge_after_pass"],
+                        environment="synthetic", allowed_repos=["a/b"], allowed_bases=["main"])
+        d = evaluate("merge_after_pass", grant_id=g["id"], project_id="projA",
+                     repo="a/b", base="main", environment="synthetic")
+        self.assertTrue(d.permitted)
+
 
 # ---------------------------------------------------------------------------
 class TestEmergencyStop(VP7Base):
@@ -238,18 +262,72 @@ class TestGithubAdapter(VP7Base):
                                 title="VP-7 демо", body="тело")
         self.assertEqual(pr1["number"], pr2["number"])
 
-    def test_squash_merge_after_pass_and_stale_head(self):
-        from atlas_core.github_adapter import GitContractError
+    def _prod(self, project_id="p"):
+        from atlas_core.github_adapter import GitContract, GitHubAdapter
+        return GitHubAdapter(forge=self.forge, contract=GitContract(), project_id=project_id)
+
+    def _persist_rp_qr(self, head, verdict, project_id="p"):
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        pkg = build_review_package(ReviewInputs(
+            project_id=project_id, run_id="r", wo_key="VP-7", vp_key="VP-7",
+            branch="atlas/vp-7-x", base_sha="B", head_sha=head, impact_class="LOCAL",
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, verdict, "", [], run_id="r")
+        return pkg["id"], rep["id"]
+
+    def _open_pr(self):
+        """feature commit (self.ad, enforce_grant=False) + push + PR + green checks."""
         sha = self._feature()
         self.ad.push_feature(self.wc, "atlas/vp-7-x")
         self.forge.set_checks(sha, "GREEN")
         pr = self.ad.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha=sha,
                                title="VP-7 демо", body="тело")
-        res = self.ad.squash_merge(pr["number"], expected_head=sha, message="VP-7: squash после PASS")
+        return sha, pr["number"]
+
+    # --- Fix1: merge исполняется ТОЛЬКО через авторитетный merge_pull_request ---
+    def test_merge_pull_request_executes_only_authoritatively(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        pass_rp, pass_qr = self._persist_rp_qr(sha, "PASS")
+        revise_rp, revise_qr = self._persist_rp_qr(sha, "REVISE")
+        # отдельные RP/QR для stale-head негатива: validate_review_package durable-
+        # инвалидирует пакет при несовпадении head, поэтому не переиспользуем pass_rp.
+        stale_rp, stale_qr = self._persist_rp_qr(sha, "PASS")
+
+        def _merge(rp, qr, head=sha, grant=g["id"]):
+            return prod.merge_pull_request(
+                project_id="p", review_package_id=rp, quality_report_id=qr, pr_number=prn,
+                expected_head=head, grant_id=grant, base="main",
+                message="VP-7: squash после PASS")
+
+        # НЕГАТИВНЫЕ — ни один не должен исполнить merge:
+        with self.assertRaises(GitContractError) as c1:   # verdict REVISE
+            _merge(revise_rp, revise_qr)
+        self.assertEqual(c1.exception.code, "REVIEWER_NOT_PASS")
+        with self.assertRaises(GitContractError):          # QR не найден по id
+            _merge(pass_rp, "qrep_missing")
+        with self.assertRaises(GitContractError):          # stale expected_head (свой RP)
+            _merge(stale_rp, stale_qr, head="deadbeef")
+        with self.assertRaises(GitContractError) as c4:    # без grant → GRANT_REQUIRED
+            _merge(pass_rp, pass_qr, grant="")
+        self.assertEqual(c4.exception.code, "GRANT_REQUIRED")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # НИ ОДИН не смёржил
+        # ПОЗИТИВНЫЙ: PASS + green + grant → фактический merge, base продвинулась.
+        res = _merge(pass_rp, pass_qr)
         self.assertTrue(res["merged"])
-        self.assertNotEqual(self.forge.branch_head("main"), self.seed)  # base продвинулась
+        self.assertNotEqual(self.forge.branch_head("main"), self.seed)
+        # PR смёржен → повторный merge того же PR больше не проходит.
         with self.assertRaises(GitContractError):
-            self.ad.squash_merge(pr["number"], expected_head="deadbeef", message="повтор")
+            _merge(pass_rp, pass_qr)
+
+    def test_no_public_raw_squash_merge_on_adapter(self):
+        # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
+        self.assertFalse(hasattr(self.ad, "squash_merge"))
 
     # --- Fix4: реальные write-операции списывают invocation-бюджет grant ---
     def test_push_consumes_budget_and_exhaustion_blocks(self):
@@ -306,10 +384,7 @@ class TestGithubAdapter(VP7Base):
             prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha="H",
                            title="VP-7 демо", body="тело")
         self.assertEqual(c2.exception.code, "GRANT_REQUIRED")
-        # squash_merge (сообщение на русском, чтобы дойти до grant-проверки)
-        with self.assertRaises(GitContractError) as c3:
-            prod.squash_merge(1, expected_head="H", message="VP-7: слияние без гранта")
-        self.assertEqual(c3.exception.code, "GRANT_REQUIRED")
+        # (merge без grant покрыт в test_merge_pull_request_executes_only_authoritatively)
 
     # --- Bypass A: exact repo/base scope энфорсится на write (не только капабилити) ---
     def test_production_exact_repo_scope_enforced(self):
@@ -335,8 +410,7 @@ class TestGithubAdapter(VP7Base):
     # --- Bypass A: все write-категории списывают бюджет одного grant ---
     def test_production_all_write_categories_consume_budget(self):
         from atlas_core.autonomy import create_grant, get_grant
-        from atlas_core.github_adapter import GitContract, GitHubAdapter
-        prod = GitHubAdapter(forge=self.forge, contract=GitContract())
+        prod = self._prod("p")
         g = create_grant(project_id="p", mode="STANDARD",
                          capabilities=["commit", "push_feature", "create_pr", "merge_after_pass"],
                          allowed_repos=["acme/demo"], allowed_bases=["main"],
@@ -348,9 +422,23 @@ class TestGithubAdapter(VP7Base):
         self.forge.set_checks(sha, "GREEN")
         pr = prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha=sha,
                             title="VP-7 демо", body="тело", grant_id=g["id"])     # 3
-        prod.squash_merge(pr["number"], expected_head=sha, message="VP-7: squash после PASS",
-                          grant_id=g["id"])                                        # 4
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        prod.merge_pull_request(project_id="p", review_package_id=rp, quality_report_id=qr,
+                                pr_number=pr["number"], expected_head=sha, grant_id=g["id"],
+                                base="main", message="VP-7: squash после PASS")     # 4
         self.assertEqual(get_grant(g["id"])["budget"]["used_invocations"], 4)
+
+    # --- Fix2: production-адаптер, привязанный к проекту, отвергает grant чужого проекта ---
+    def test_adapter_cross_project_grant_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        prod = self._prod("p")   # адаптер привязан к проекту p
+        self._feature_prod(prod)
+        g = create_grant(project_id="other", mode="STANDARD", capabilities=["push_feature"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="x")
+        with self.assertRaises(GitContractError) as cm:
+            prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        self.assertEqual(cm.exception.code, "PROJECT_MISMATCH")
 
     def _feature_prod(self, prod):
         subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
@@ -500,6 +588,62 @@ class TestDeliveryPersistence(VP7Base):
         record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
                         head_sha="HEAD2", gate_decision="PERMIT")
         self.assertEqual(len(list_deliveries(project_id="p")), 2)
+
+    # --- Fix3: ключ содержит ПОЛНЫЙ head SHA (не первые 12 символов) ---
+    def test_delivery_key_uses_full_head(self):
+        from atlas_core.deliveries import delivery_key
+        full = "0123456789abcdef0123456789abcdef01234567"
+        k = delivery_key("a/b", "main", "atlas/vp-7", full)
+        self.assertIn(full, k)
+        # два head с одинаковым 12-префиксом различаются в ключе
+        k2 = delivery_key("a/b", "main", "atlas/vp-7", "0123456789ab" + "f" * 28)
+        self.assertNotEqual(k, k2)
+
+    # --- Fix3: UNIQUE-индекс на idempotency_key (дубликат → IntegrityError) ---
+    def test_delivery_unique_constraint(self):
+        from datetime import datetime, timezone
+
+        from atlas_core.db import session_scope
+        from atlas_core.ids import new_id
+        from atlas_core.orm import GithubDelivery
+        from sqlalchemy.exc import IntegrityError
+        now = datetime.now(timezone.utc)
+        with session_scope() as s:
+            s.add(GithubDelivery(id=new_id("ghd"), idempotency_key="dupkey",
+                                 created_at=now, updated_at=now))
+            s.commit()
+        with self.assertRaises(IntegrityError):
+            with session_scope() as s:
+                s.add(GithubDelivery(id=new_id("ghd"), idempotency_key="dupkey",
+                                     created_at=now, updated_at=now))
+                s.commit()
+
+    # --- Fix3: конкурентные одинаковые доставки дают ровно ОДНУ строку ---
+    def test_delivery_concurrent_upsert_single_row(self):
+        import threading
+
+        from atlas_core.deliveries import list_deliveries, record_delivery
+        head = "C" * 40
+        n = 6
+        barrier = threading.Barrier(n)
+        errors: list[Exception] = []
+
+        def worker(i):
+            try:
+                barrier.wait()
+                record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
+                                head_sha=head, gate_decision="PERMIT", gate_reason=f"r{i}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        rows = [d for d in list_deliveries(project_id="p") if d["head_sha"] == head]
+        self.assertEqual(len(rows), 1)  # атомарный upsert → одна durable-строка
 
     def test_merge_gate_preview_api_persists_delivery(self):
         from atlas_core.app import create_app
