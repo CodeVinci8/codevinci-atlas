@@ -37,22 +37,37 @@
   Reconcile профилей: **4 профиля видны** в живой UI (root-cause: реестр не
   синхронизировался в БД). Полная регрессия **268 OK**; Chrome — 43 скриншота,
   0 PII (Chromium 151.0.7922.34).
-- **Активного VP нет.** Следующий гейт — VP-7 (Autonomy/GitHub/Time Machine, §40),
-  **не начат** (отдельное решение владельца).
+- **VP-7 — Autonomy, GitHub & Time Machine (§40): В РАБОТЕ** на ветке
+  `atlas/vp-7-autonomy-github-time-machine` (от `main` `efee4c9`). Автономия (4
+  режима, capability-гранты, Emergency Stop), GitHub-адаптер (`gh`) + STANDARD
+  merge gate (current-head), Time Machine (checkpoints/replay/compare), Apache-2.0
+  LICENSE, read-only auth-health 4 профилей. Новая миграция — `0007`.
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
-  Runner READY. Живая БД — `0006_review_quality`.
-- **Профили:** 4 реальных, авторизованы; per-profile идентичности
-  (`atlas-cx01/02`, `atlas-cl01/02`) и исполняемые файлы `<root>/.local/bin/*`.
-- **Среда:** Ubuntu 26.04, root-only. **Codex CLI 0.146.0**, Claude Code 2.1.220.
-  uv/pnpm/pytest не установлены → на stdlib.
+  Runner READY. **Живая БД — `0006_review_quality`** (миграция на `0007` — при
+  deploy VP-7, backup снимается до миграции).
+- **Профили:** 4 зарегистрированы (`codex-plus-01/02`, `claude-pro-01/02`);
+  per-profile идентичности (`atlas-cx01/02`, `atlas-cl01/02`) и исполняемые файлы
+  `<root>/.local/bin/*`. **`AUTH_REQUIRED` в UI — консервативное durable-состояние,
+  не доказательство протухания логинов.** Готовность подтверждается только
+  bounded read-only auth-health (`codex login status`/`claude auth status`),
+  результат — свежий факт с observed_at/source. Успех auth не выводит capacity
+  (остаётся UNKNOWN, §11.6).
+- **Среда — host отделён от Core-контейнера:** **host** — Ubuntu 26.04 LTS,
+  kernel `7.0.0-28-generic` (по host `/etc/os-release`); **Core-контейнер** —
+  Debian GNU/Linux 13 (trixie). Не называть host Debian из-за контейнера.
+  **Codex CLI 0.146.0**, Claude Code 2.1.220. На host: uv, pnpm, `.venv`
+  (Python 3.14) присутствуют; регрессия гоняется через `.venv`.
 - **Runtime-layout:** единый **`/var/lib/codevinci-atlas`** (repo-local `./var`
   больше не используется; тесты — временный `ATLAS_DATA_DIR`).
 - **Изоляция:** per-profile Unix-идентичности `atlas-cx01/02`, `atlas-cl01/02`;
   root `0700` во владении своей идентичности; Runner дропает привилегии.
   Сервисный `atlas` не читает credentials.
-- **Репозиторий:** `CodeVinci8/codevinci-atlas`, public. VP-0 (PR #1), VP-1
-  (PR #2), VP-2 (PR #3), VP-3 (PR #4), VP-4 (PR #6) и **VP-5 (PR #9, squash
-  `afefa61`)** **смёржены** в `main`. Живая БД — на `0005_agent_pipeline`.
+- **Репозиторий:** `CodeVinci8/codevinci-atlas`, public. **VP-0…VP-6 смёржены**
+  в `main` (VP-6: PR #11 squash `63cdc35`, doc-sync PR #12 squash `efee4c9` =
+  текущий `main`). Живая БД — на **`0006_review_quality`**. VP-7 — в работе.
+- **Лицензия:** **Apache-2.0** (owner-решение, §49; см. DECISIONS). LICENSE в
+  корне; SPDX в README/metadata. Reuse-аудит: копий стороннего кода нет
+  (все REFERENCE/SPIKE), NOTICE не требуется.
 - **Git-идентичность:** имя `CodeVinci`, email в `git config` (задан).
 - **Главные правила:** один writer, credentials не копируются, секреты не в
   durable-состоянии, capacity честно UNKNOWN.

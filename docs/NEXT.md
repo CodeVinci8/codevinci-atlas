@@ -40,22 +40,31 @@
 
 ## Активный VP
 
-**Нет активного VP.** VP-0…VP-6 завершены и смёржены. Следующий гейт — **VP-7
-(Autonomy, GitHub & Time Machine, Master Spec §40)**, но он **не начат** и
-стартует только по отдельному решению владельца.
+**VP-7 — Autonomy, GitHub & Time Machine (Master Spec §40): В РАБОТЕ**
+([`vp/VP-7.md`](vp/VP-7.md)). Ветка `atlas/vp-7-autonomy-github-time-machine`
+(от `main` `efee4c9`). Владелец явно авторизовал закрытие VP-7 в сессии.
+Скоуп: 4 режима (GUIDED/STANDARD/AUTONOMOUS/TRUSTED), durable capability-гранты
+(раздельные capabilities, fail-closed), Emergency Stop, GitHub-адаптер (`gh`) +
+STANDARD merge gate (current-head, stale PASS/CI → deny), Time Machine
+(checkpoints/replay/compare), Apache-2.0 LICENSE + reuse-аудит, read-only
+auth-health 4 профилей, отложенный реальный VP-6 Quality E2E (≤4 вызова),
+бренд/favicon/реальная CPU-утилизация/контекстное next-action. Миграция — `0007`.
+Живая БД — `0006_review_quality` (мигрирует на `0007` при deploy).
 
 ## NEXT_ACTION
 
-Owner проводит финальный визуальный обзор **VP-6 Качество/Профили/Пульс** на
-`http://127.0.0.1:3210` (SSH-туннель): вкладка «Качество» — blocking findings
-первыми, QualityReport (gate/evidence/next action), SHA-bound ReviewPackage,
-claim vs evidence, impact/cache, manual audit, waiver, focused fix Work Order;
-«Профили» — **4 карточки** Codex/Claude, честная ёмкость UNKNOWN; «Пульс» —
-иерархия (состояние → риски → ресурсы → диагностика), критическое хранилище
-и подпись «Нагрузка за 1/5/15 мин»; RU/EN.
+Owner проводит финальный визуальный обзор **VP-7 Автономия/Time Machine/Пульс**
+на `http://127.0.0.1:3210` (SSH-туннель): «Автономия» — режимы, capability-матрица
+(недоступные через автономию помечены owner-only), гранты (scope/бюджет/срок),
+Emergency Stop + явный resume, GitHub-доставка и merge gate; «Time Machine» —
+хронология чекпоинтов, сравнение, replay/rollback preview (read-only, destructive
+недоступен без отдельного grant); «Пульс» — реальная CPU-утилизация (кольцо),
+контекстное next action отдельно от рисков, load average — в диагностике; favicon
+и brand-home; RU/EN.
 
 ## Границы
 
-Активного VP-гейта нет (WIP=0). **VP-7…VP-9 не начинать** — отдельное решение
-владельца. Полный операционный console Profiles/Pulse (40 профилей) — VP-8.
-Cookie-import — `UNSUPPORTED`. LICENSE — отдельное решение владельца.
+Активный гейт — **VP-7** (WIP=1). **VP-8/VP-9 не начинать.** Полный операционный
+console Profiles/Pulse (40 профилей, login/refresh/quotas/usage-history) — VP-8.
+File Atelier release-proof — VP-9. Cookie-import — `UNSUPPORTED`. LICENSE —
+**Apache-2.0** (owner-решение, §49; см. DECISIONS).
