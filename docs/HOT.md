@@ -28,10 +28,19 @@
   provider-E2E: Codex Planner (codex-plus-01) → Claude Builder (claude-pro-01,
   артефакт calc.py) → независимый Codex Reviewer (codex-plus-02) → PASS, 3/6
   вызовов.
-- **Активного VP нет.** Следующий гейт — VP-6 (Review & Quality, §39), **не
-  начат** (отдельное решение владельца).
+- **VP-6 — Review & Quality: ЗАВЕРШЁН — 26/26 + реальная Chrome-верификация**
+  (merged PR #11, squash `63cdc35`, CI head `f6c3d0e`; живая БД на
+  `0006_review_quality`). Миграция 0006 (9 таблиц), SHA-bound ReviewPackage
+  (инвалидация фактом → INVALID_EVIDENCE), Quality Firewall (11 gates), Impact
+  engine, Evidence Cache, manual audit/waiver, fix-loop (второй REVISE → BLOCKED),
+  экран Качество RU/EN, bounded Ember-refinement Pulse/Profiles/Audit/время.
+  Reconcile профилей: **4 профиля видны** в живой UI (root-cause: реестр не
+  синхронизировался в БД). Полная регрессия **268 OK**; Chrome — 43 скриншота,
+  0 PII (Chromium 151.0.7922.34).
+- **Активного VP нет.** Следующий гейт — VP-7 (Autonomy/GitHub/Time Machine, §40),
+  **не начат** (отдельное решение владельца).
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
-  Runner READY.
+  Runner READY. Живая БД — `0006_review_quality`.
 - **Профили:** 4 реальных, авторизованы; per-profile идентичности
   (`atlas-cx01/02`, `atlas-cl01/02`) и исполняемые файлы `<root>/.local/bin/*`.
 - **Среда:** Ubuntu 26.04, root-only. **Codex CLI 0.146.0**, Claude Code 2.1.220.

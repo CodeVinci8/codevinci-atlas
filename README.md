@@ -46,10 +46,22 @@ versioned-памятью вместо бесконечного чата.
   full-width Pulse, RU/EN. Детерминированная приёмка `run_vp5_acceptance.py` —
   **26/26**; реальный provider-E2E `run_vp5_real_e2e.py` — реальный артефакт
   (3/6 подписочных вызовов, PASS). Смёржен через **PR #9** (squash `afefa61`,
-  CI head `86c504e`); живая БД — на `0005_agent_pipeline`.
+  CI head `86c504e`).
+- **VP-6 — Review & Quality: ЗАВЕРШЁН (26/26 PASS + реальная Chrome-верификация)**
+  ([`docs/vp/VP-6.md`](docs/vp/VP-6.md)) — SHA-bound ReviewPackage (инвалидация
+  фактом → `INVALID_EVIDENCE`), Quality Firewall (11 gates + freshness + license-
+  visibility), вердикты `PASS/REVISE/BLOCKED/OWNER_REQUIRED/INVALID_EVIDENCE`,
+  QualityReport с объяснением, Impact engine (`DOC_ONLY/LOCAL/INTEGRATION/SHARED/
+  HIGH_RISK`), Evidence Cache, manual audit (read-only), waiver (non-waivable),
+  fix-loop (второй REVISE → BLOCKED), экран **Качество** (RU/EN). Reconcile
+  профилей: **4 профиля видны** в живой UI. Bounded Ember-refinement. Приёмка
+  `run_vp6_acceptance.py` — **26/26**; полная регрессия **268 OK**; реальная
+  Chrome-верификация (Chromium 151.0.7922.34, 43 скриншота, 0 PII). Смёржен через
+  **PR #11** (squash `63cdc35`, CI head `f6c3d0e`); живая БД — на
+  `0006_review_quality`.
 
-Активного VP нет. Следующий этап — **VP-6: Review & Quality** (Master Spec §39) —
-**не начат** и стартует по отдельному решению владельца.
+Активного VP нет. Следующий этап — **VP-7: Autonomy, GitHub & Time Machine**
+(Master Spec §40) — **не начат** и стартует по отдельному решению владельца.
 
 ## Быстрый старт
 
