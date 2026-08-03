@@ -65,6 +65,14 @@ def onboarding(profile_id: str, req: OnboardingRequest) -> JSONResponse:
                         status_code=422)
 
 
+@router.get("/profiles/auth-health/report")
+def auth_health_report() -> JSONResponse:
+    """Read-only отчёт последних auth-health наблюдений (VP-7): нормализованное
+    состояние + observed_at + source + safe reason + STALE. Без credentials."""
+    from .auth_health import auth_health_report as _report
+    return JSONResponse({"auth_health": _report()})
+
+
 @router.get("/models")
 def list_models(provider: str | None = Query(None)) -> JSONResponse:
     return JSONResponse({"models": _models.list_models(provider=provider)})

@@ -198,6 +198,17 @@ def cmd_profiles(args) -> int:
                 for r in rows]
         print(json.dumps(safe, ensure_ascii=False, indent=2))
         return 0
+    if args.action == "auth-health":
+        # VP-7: bounded read-only auth-проверки 4 профилей через официальные CLI
+        # (codex login status / claude auth status). Без чтения credential-файлов,
+        # без вывода token/cookie/email; результат — свежий факт (observed_at/source).
+        from .auth_health import run_auth_health
+        rep = run_auth_health(actor=args.actor or "owner")
+        safe = [{"alias": o["alias"], "provider": o["provider"],
+                 "auth_status": o["auth_status"], "reason": o["reason"],
+                 "cli_version": o["cli_version"]} for o in rep]
+        print(json.dumps(safe, ensure_ascii=False, indent=2))
+        return 0
     return 2
 
 
@@ -215,9 +226,9 @@ def main(argv: list[str] | None = None) -> int:
         if name == "backup":
             p.add_argument("--out", help="каталог для архива")
         p.set_defaults(func=fn)
-    pp = sub.add_parser("profiles", help="сверка/список профилей (safe-метаданные)")
-    pp.add_argument("action", choices=["reconcile", "list"],
-                    help="reconcile: реестр→БД; list: safe-список")
+    pp = sub.add_parser("profiles", help="сверка/список/auth-health профилей (safe-метаданные)")
+    pp.add_argument("action", choices=["reconcile", "list", "auth-health"],
+                    help="reconcile: реестр→БД; list: safe-список; auth-health: read-only проверка входа")
     pp.add_argument("--json", action="store_true")
     pp.add_argument("--actor", default="deploy", help="актор для Audit")
     pp.set_defaults(func=cmd_profiles)

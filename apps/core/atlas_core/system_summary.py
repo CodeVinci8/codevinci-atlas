@@ -33,13 +33,75 @@ def _read(path: str) -> str | None:
         return None
 
 
+# Кэш последней выборки /proc/stat для дельты CPU-утилизации между вызовами.
+_cpu_prev: tuple[int, int, float] | None = None
+
+
+def _read_cpu_times() -> tuple[int, int] | None:
+    """(total_jiffies, idle_jiffies) из первой строки /proc/stat."""
+    stat = _read("/proc/stat")
+    if not stat:
+        return None
+    for line in stat.splitlines():
+        if line.startswith("cpu "):
+            try:
+                parts = [int(x) for x in line.split()[1:]]
+            except ValueError:
+                return None
+            if len(parts) < 4:
+                return None
+            idle = parts[3] + (parts[4] if len(parts) > 4 else 0)  # idle + iowait
+            return sum(parts), idle
+    return None
+
+
+def _cpu_utilization() -> dict:
+    """Реальная CPU-утилизация 0–100% из **дельты двух выборок** ``/proc/stat``
+    (не преобразование load average). Окно = время между последовательными
+    вызовами; при первом вызове берётся короткая bootstrap-выборка. Если
+    измерить нельзя → ``utilization_pct=None`` (UI покажет «Данные недоступны»)."""
+    global _cpu_prev
+    cur = _read_cpu_times()
+    if cur is None:
+        return {"utilization_pct": None, "sample_window_s": None, "source": "unavailable"}
+    now = time.monotonic()
+    if _cpu_prev is None:
+        # Bootstrap: короткая вторая выборка для немедленного реального измерения.
+        time.sleep(0.12)
+        cur2 = _read_cpu_times()
+        now2 = time.monotonic()
+        if cur2 is None:
+            _cpu_prev = (cur[0], cur[1], now)
+            return {"utilization_pct": None, "sample_window_s": None, "source": "/proc/stat"}
+        prev, cur, window = cur, cur2, now2 - now
+        _cpu_prev = (cur[0], cur[1], now2)
+    else:
+        prev = (_cpu_prev[0], _cpu_prev[1])
+        window = now - _cpu_prev[2]
+        _cpu_prev = (cur[0], cur[1], now)
+    dtotal = cur[0] - prev[0]
+    didle = cur[1] - prev[1]
+    # Слишком узкое окно → измерение недостоверно (честно None, без шума).
+    if dtotal <= 0 or window < 0.05:
+        return {"utilization_pct": None, "sample_window_s": round(window, 3),
+                "source": "/proc/stat delta"}
+    pct = (1.0 - didle / dtotal) * 100.0
+    pct = max(0.0, min(100.0, pct))
+    return {"utilization_pct": round(pct, 1), "sample_window_s": round(window, 3),
+            "source": "/proc/stat delta"}
+
+
 def _cpu() -> dict:
     load = None
     try:
         load = [round(x, 2) for x in os.getloadavg()]
     except (OSError, AttributeError):
         load = None
-    return {"logical_cores": os.cpu_count(), "load_avg": load}
+    util = _cpu_utilization()
+    # load_avg — планировщик, НЕ CPU%; utilization_pct — реальная утилизация.
+    return {"logical_cores": os.cpu_count(), "load_avg": load,
+            "utilization_pct": util["utilization_pct"],
+            "sample_window_s": util["sample_window_s"], "util_source": util["source"]}
 
 
 def _memory() -> dict:
@@ -204,9 +266,65 @@ def _runner(settings) -> dict:
         return {"status": "UNKNOWN", "uptime_s": None}
 
 
+def _next_action(runs: dict) -> dict:
+    """Контекстное **точное продуктовое** следующее действие (§27.2), отдельно от
+    операционных рисков. Приоритет: owner-required Run → активный Run → принятый
+    Work Order без Run → проект без принятого VP → нет проектов → всё завершено
+    (канонический следующий VP/review). Честный PARTIAL при отсутствии таблиц."""
+    from sqlalchemy import text as _text
+
+    def _count(table: str, where=None) -> int | None:
+        if _table_present(table) is not True:
+            return None
+        try:
+            with session_scope() as s:
+                q = f"SELECT COUNT(*) FROM {table}"
+                if where:
+                    q += f" WHERE {where}"
+                return int(s.execute(_text(q)).scalar_one())
+        except Exception:  # noqa: BLE001
+            return None
+
+    owner_req = runs.get("owner_required")
+    active = runs.get("active")
+    queued = runs.get("queued")
+    if owner_req:
+        return {"code": "OPEN_OWNER_RUN", "text": "Откройте Run, требующий решения владельца.",
+                "target": "runs", "count": owner_req}
+    if active:
+        return {"code": "INSPECT_RUN", "text": "Проверьте прогресс активного Run.",
+                "target": "runs", "count": active}
+    if queued:
+        return {"code": "INSPECT_RUN", "text": "Проверьте очередь Run.",
+                "target": "runs", "count": queued}
+    # Принятый (ready) Work Order без Run.
+    accepted_wo = _count("work_orders",
+                         "status='ready' AND id NOT IN (SELECT work_order_id FROM runs "
+                         "WHERE work_order_id != '')")
+    if accepted_wo:
+        return {"code": "CREATE_RUN", "text": "Создайте Run по принятому Work Order.",
+                "target": "workorders", "count": accepted_wo}
+    projects = _count("projects", "status != 'disconnected'")
+    if projects == 0:
+        return {"code": "CONNECT_PROJECT", "text": "Подключите проект, чтобы начать.",
+                "target": "projects"}
+    # Проект без активного VP → открыть Map/Brief.
+    no_vp = _count("projects",
+                   "status != 'disconnected' AND id NOT IN "
+                   "(SELECT project_id FROM vp_activations)")
+    if no_vp:
+        return {"code": "OPEN_MAP", "text": "Откройте Project Map/Brief для приёмки VP.",
+                "target": "projects", "count": no_vp}
+    if projects is None:
+        return {"code": "PARTIAL", "text": "Состояние проектов недоступно.", "target": "pulse"}
+    return {"code": "NEXT_VP", "text": "Всё завершено — перейдите к следующему VP/review.",
+            "target": "quality"}
+
+
 def system_summary(settings) -> dict:
     """Собрать sanitized-сводку. Partial-состояния честны (None)."""
     data_dir = settings.data_dir
+    runs = _run_counts()
     return {
         "collected_at": utcnow_iso(),
         "atlas_version": settings.version,
@@ -224,8 +342,9 @@ def system_summary(settings) -> dict:
                     "note": "Core не наблюдает Web напрямую"},
         },
         "backup_age_s": _backup_age_s(data_dir),
-        "runs": _run_counts(),
+        "runs": runs,
         "leases": _lease_counts(),
+        "next_action": _next_action(runs),
     }
 
 

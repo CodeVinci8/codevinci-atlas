@@ -714,7 +714,8 @@ class ProfileHealth(Base):
     auth_status: Mapped[str] = mapped_column(String(30), default="UNKNOWN")
     plan_label: Mapped[str] = mapped_column(String(40), default="")  # verified only
     permissions_ok: Mapped[bool] = mapped_column(Boolean, default=False)
-    last_error: Mapped[str] = mapped_column(String(80), default="")  # redacted short code
+    last_error: Mapped[str] = mapped_column(String(80), default="")  # redacted short code / safe reason
+    source: Mapped[str] = mapped_column(String(40), default="")  # напр. cli_status (VP-7)
     observed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
 
     def to_dict(self) -> dict:
@@ -722,7 +723,8 @@ class ProfileHealth(Base):
             "profile_id": self.profile_id, "executable": self.executable,
             "cli_version": self.cli_version, "auth_status": self.auth_status,
             "plan_label": self.plan_label, "permissions_ok": self.permissions_ok,
-            "last_error": self.last_error, "observed_at": _iso(self.observed_at),
+            "last_error": self.last_error, "source": self.source,
+            "observed_at": _iso(self.observed_at),
         }
 
 
@@ -1260,4 +1262,211 @@ class ProfileRegistryReconcile(Base):
             "id": self.id, "created": self.created, "updated": self.updated,
             "total": self.total, "by_provider": _json.loads(self.by_provider_json or "{}"),
             "actor": self.actor, "created_at": _iso(self.created_at),
+        }
+
+
+# ---------------------------------------------------------------------------
+# VP-7 — Autonomy, GitHub & Time Machine (Master Spec §19, §20, §21, §23).
+# Durable capability grants (раздельные capabilities, optimistic version),
+# Emergency Stop (append-only lifecycle, переживает рестарт), immutable
+# content-addressed checkpoints Time Machine, GitHub delivery/merge-gate записи.
+# Секреты/token/cookie/email/raw path/transcript НИКОГДА не хранятся. Таблицы
+# создаёт только Alembic (0007_autonomy_github_time_machine).
+
+class Grant(Base):
+    """Durable capability grant (§19). Capabilities раздельны (список кодов), а
+    не boolean «full access». Optimistic ``version``; revocation/expiry явны.
+    ``content_hash`` покрывает immutable-снимок (для grant_snapshot в
+    ReviewPackage/checkpoint)."""
+
+    __tablename__ = "grants"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    owner_ref: Mapped[str] = mapped_column(String(80), default="owner")
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    environment: Mapped[str] = mapped_column(String(40), default="")  # synthetic|local|…
+    mode: Mapped[str] = mapped_column(String(20), default="GUIDED", index=True)
+    allowed_repos_json: Mapped[str] = mapped_column(Text, default="[]")
+    allowed_bases_json: Mapped[str] = mapped_column(Text, default="[]")
+    workspace_allowlist_json: Mapped[str] = mapped_column(Text, default="[]")
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]")
+    branch_rules_json: Mapped[str] = mapped_column(Text, default="{}")
+    command_restrictions_json: Mapped[str] = mapped_column(Text, default="{}")
+    budget_json: Mapped[str] = mapped_column(Text, default="{}")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    starts_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    state: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)  # ACTIVE|REVOKED|EXPIRED
+    revoked_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    revoked_by: Mapped[str] = mapped_column(String(80), default="")
+    revoke_reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    audit_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    content_hash: Mapped[str] = mapped_column(String(80), default="", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "owner_ref": self.owner_ref, "project_id": self.project_id,
+            "environment": self.environment, "mode": self.mode,
+            "allowed_repos": _json.loads(self.allowed_repos_json or "[]"),
+            "allowed_bases": _json.loads(self.allowed_bases_json or "[]"),
+            "workspace_allowlist": _json.loads(self.workspace_allowlist_json or "[]"),
+            "capabilities": _json.loads(self.capabilities_json or "[]"),
+            "branch_rules": _json.loads(self.branch_rules_json or "{}"),
+            "command_restrictions": _json.loads(self.command_restrictions_json or "{}"),
+            "budget": _json.loads(self.budget_json or "{}"),
+            "reason": self.reason, "starts_at": _iso(self.starts_at),
+            "expires_at": _iso_opt(self.expires_at), "state": self.state,
+            "revoked_at": _iso_opt(self.revoked_at), "revoked_by": self.revoked_by,
+            "revoke_reason": self.revoke_reason, "actor": self.actor,
+            "correlation_id": self.correlation_id,
+            "audit_refs": _json.loads(self.audit_refs_json or "[]"),
+            "content_hash": self.content_hash, "version": self.version,
+            "created_at": _iso(self.created_at), "updated_at": _iso(self.updated_at),
+        }
+
+
+class EmergencyStop(Base):
+    """Append-only lifecycle Emergency Stop (§19). Текущее состояние =
+    ``active`` последней записи. Переживает рестарт (durable), не
+    реактивируется молча; RESUMED — только по явному owner-действию."""
+
+    __tablename__ = "emergency_stops"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    action: Mapped[str] = mapped_column(String(12), default="ENGAGED")  # ENGAGED|RESUMED
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(80), default="owner")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    interrupted_runs_json: Mapped[str] = mapped_column(Text, default="[]")
+    released_leases_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id, "action": self.action, "active": self.active,
+            "reason": self.reason, "actor": self.actor,
+            "correlation_id": self.correlation_id,
+            "interrupted_runs": _json.loads(self.interrupted_runs_json or "[]"),
+            "released_leases": _json.loads(self.released_leases_json or "[]"),
+            "created_at": _iso(self.created_at),
+        }
+
+
+class Checkpoint(Base):
+    """Immutable content-addressed checkpoint Time Machine (§21). Без секретов,
+    без transcript; хранятся только provider session id (не содержимое), хеши
+    патча/артефактов/тестов, снимок grant (хеш). ``content_hash`` = sha256 над
+    canonical immutable-payload; tamper инвалидирует."""
+
+    __tablename__ = "checkpoints"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    vp_key: Mapped[str] = mapped_column(String(80), default="", index=True)
+    work_order_id: Mapped[str] = mapped_column(String(40), default="")
+    run_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    db_revision: Mapped[str] = mapped_column(String(40), default="")
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    base_sha: Mapped[str] = mapped_column(String(64), default="")
+    head_sha: Mapped[str] = mapped_column(String(64), default="")
+    worktree_status: Mapped[str] = mapped_column(String(20), default="")  # clean|dirty
+    patch_hash: Mapped[str] = mapped_column(String(80), default="")
+    artifact_hashes_json: Mapped[str] = mapped_column(Text, default="[]")
+    profile_alias: Mapped[str] = mapped_column(String(80), default="")
+    model: Mapped[str] = mapped_column(String(80), default="")
+    effort: Mapped[str] = mapped_column(String(40), default="")
+    session_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    grant_id: Mapped[str] = mapped_column(String(40), default="")
+    grant_hash: Mapped[str] = mapped_column(String(80), default="")
+    test_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    handoff_ref: Mapped[str] = mapped_column(String(40), default="")
+    cause: Mapped[str] = mapped_column(String(80), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    content_hash: Mapped[str] = mapped_column(String(80), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def immutable_payload(self) -> dict:
+        """Canonical immutable-содержимое, покрываемое ``content_hash``."""
+        import json as _json
+        return {
+            "project_id": self.project_id, "vp_key": self.vp_key,
+            "work_order_id": self.work_order_id, "run_id": self.run_id,
+            "db_revision": self.db_revision, "branch": self.branch,
+            "base_sha": self.base_sha, "head_sha": self.head_sha,
+            "worktree_status": self.worktree_status, "patch_hash": self.patch_hash,
+            "artifact_hashes": _json.loads(self.artifact_hashes_json or "[]"),
+            "profile_alias": self.profile_alias, "model": self.model,
+            "effort": self.effort,
+            "session_ids": _json.loads(self.session_ids_json or "[]"),
+            "grant_id": self.grant_id, "grant_hash": self.grant_hash,
+            "test_refs": _json.loads(self.test_refs_json or "[]"),
+            "evidence_refs": _json.loads(self.evidence_refs_json or "[]"),
+            "handoff_ref": self.handoff_ref, "cause": self.cause,
+        }
+
+    def to_dict(self) -> dict:
+        d = self.immutable_payload()
+        d.update({"id": self.id, "actor": self.actor,
+                  "correlation_id": self.correlation_id,
+                  "content_hash": self.content_hash,
+                  "created_at": _iso(self.created_at)})
+        return d
+
+
+class GithubDelivery(Base):
+    """GitHub delivery/merge-gate запись (§20). PR-состояние, checks по текущему
+    head, mergeability, решение gate + reason. Token НЕ хранится. Идемпотентность
+    по ``idempotency_key`` (repo+base+branch+head)."""
+
+    __tablename__ = "github_deliveries"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    run_id: Mapped[str] = mapped_column(String(40), default="")
+    repo: Mapped[str] = mapped_column(String(120), default="", index=True)
+    base: Mapped[str] = mapped_column(String(120), default="")
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    head_sha: Mapped[str] = mapped_column(String(64), default="")
+    pr_number: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True)
+    pr_url: Mapped[str] = mapped_column(String(255), default="")
+    pr_state: Mapped[str] = mapped_column(String(20), default="NONE")  # NONE|OPEN|MERGED|CLOSED
+    checks_state: Mapped[str] = mapped_column(String(20), default="UNKNOWN")
+    checks_head_sha: Mapped[str] = mapped_column(String(64), default="")
+    mergeable: Mapped[bool] = mapped_column(Boolean, default=False)
+    merge_state: Mapped[str] = mapped_column(String(30), default="")
+    review_package_id: Mapped[str] = mapped_column(String(40), default="")
+    quality_report_id: Mapped[str] = mapped_column(String(40), default="")
+    gate_decision: Mapped[str] = mapped_column(String(20), default="")  # PERMIT|DENY
+    gate_reason: Mapped[str] = mapped_column(String(60), default="")
+    grant_id: Mapped[str] = mapped_column(String(40), default="")
+    idempotency_key: Mapped[str] = mapped_column(String(120), default="", index=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "project_id": self.project_id, "run_id": self.run_id,
+            "repo": self.repo, "base": self.base, "branch": self.branch,
+            "head_sha": self.head_sha, "pr_number": self.pr_number,
+            "pr_url": self.pr_url, "pr_state": self.pr_state,
+            "checks_state": self.checks_state, "checks_head_sha": self.checks_head_sha,
+            "mergeable": self.mergeable, "merge_state": self.merge_state,
+            "review_package_id": self.review_package_id,
+            "quality_report_id": self.quality_report_id,
+            "gate_decision": self.gate_decision, "gate_reason": self.gate_reason,
+            "grant_id": self.grant_id, "idempotency_key": self.idempotency_key,
+            "correlation_id": self.correlation_id, "actor": self.actor,
+            "created_at": _iso(self.created_at), "updated_at": _iso(self.updated_at),
         }
