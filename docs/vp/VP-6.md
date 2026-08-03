@@ -1,12 +1,13 @@
 # VP-6 — Review & Quality (исполнимый спек)
 
-**Статус:** В РАБОТЕ (активный VP; WIP=1).
+**Статус:** ЗАВЕРШЁН — 26/26 PASS + реальная Chrome-верификация, СМЁРЖЕН в `main`.
 **Источник истины:** [`docs/MASTER_SPEC.md`](../MASTER_SPEC.md) §39 (VP-6) и §18
 (Review, Quality и tests), связанные §16 (Work Orders/JobPackage), §17 (Agent
 Pipeline), §25 (API/events), §26–29 (Web/Ember/RU-EN/a11y), §30 (Security),
 §31 (Observability), §44 (Report).
-**Ветка:** `atlas/vp-6-review-quality` (от `main` `736ad1e`). Живая БД до VP-6 —
-на `0005_agent_pipeline`.
+**Ветка:** `atlas/vp-6-review-quality` (от `main` `736ad1e`) · **PR:** #11
+(squash) · **CI head:** `f6c3d0e` · **merge:** `63cdc35`. Живая БД мигрирована на
+`0006_review_quality` (backup снят до миграции; данные VP-0..5 сохранены).
 
 ## Result (сохраняется дословно из §39)
 

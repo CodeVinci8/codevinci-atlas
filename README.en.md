@@ -47,10 +47,22 @@ Active staged development across **VP-0…VP-9**. Completed and merged into `mai
   full-width Pulse, RU/EN. Deterministic acceptance `run_vp5_acceptance.py` —
   **26/26**; real provider E2E `run_vp5_real_e2e.py` — real artifact (3/6
   subscription calls, PASS). Merged via **PR #9** (squash `afefa61`, CI head
-  `86c504e`); live DB on `0005_agent_pipeline`.
+  `86c504e`).
+- **VP-6 — Review & Quality: COMPLETE (26/26 PASS + real Chrome verification)**
+  ([`docs/vp/VP-6.md`](docs/vp/VP-6.md)) — SHA-bound ReviewPackage (invalidation
+  by fact → `INVALID_EVIDENCE`), Quality Firewall (11 gates + freshness + license
+  visibility), verdicts `PASS/REVISE/BLOCKED/OWNER_REQUIRED/INVALID_EVIDENCE`,
+  explaining QualityReport, Impact engine (`DOC_ONLY/LOCAL/INTEGRATION/SHARED/
+  HIGH_RISK`), Evidence Cache, read-only manual audit, non-waivable waiver,
+  fix-loop (second REVISE → BLOCKED), a **Quality** screen (RU/EN). Profile
+  reconciliation: **4 profiles now visible** in the live UI. Bounded Ember
+  refinement. Acceptance `run_vp6_acceptance.py` — **26/26**; full regression
+  **268 OK**; real Chrome verification (Chromium 151.0.7922.34, 43 screenshots,
+  0 PII). Merged via **PR #11** (squash `63cdc35`, CI head `f6c3d0e`); live DB on
+  `0006_review_quality`.
 
-No VP is currently active. Next stage — **VP-6: Review & Quality** (Master Spec
-§39) — is **not started**; it begins only by separate owner decision.
+No VP is currently active. Next stage — **VP-7: Autonomy, GitHub & Time Machine**
+(Master Spec §40) — is **not started**; it begins only by separate owner decision.
 
 ## Quick start
 

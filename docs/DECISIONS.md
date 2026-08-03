@@ -391,10 +391,33 @@ bootstrap-коммит в `main` (только repo-owned non-secret исход�
   `license_dependency` эмитит видимый owner/info finding об отсутствии Atlas
   LICENSE. LICENSE **не** добавляется (VP-6 не выбирает лицензию).
 
+## VP-6 — ЗАВЕРШЁН (26/26 + реальная Chrome), СМЁРЖЕН: PR #11, squash `63cdc35`, CI head `f6c3d0e`; живая БД `0006_review_quality`
+
+Приёмка `scripts/run_vp6_acceptance.py`: **26/26** (детерминированно, изолированная
+мигрированная БД + посеянные дефекты в синтетических репо; живая БД не затронута).
+Полная Python-регрессия **268 OK** (impact HIGH_RISK: миграция 0006 + SHARED
+orm.py оправдывают полную регрессию). Web tsc/build/i18n (569 ключей) green.
+Реальная **Chrome-верификация** (Playwright + Chromium **151.0.7922.34**): 43
+скриншота 1440/1024/768/390 × RU/EN + reduced-motion + Quality detail +
+критическое хранилище; язык RU/EN persist, focus-outline, нет горизонтального
+overflow, тач-таргеты ≥44px, **0 PII** в DOM/сети, данные переживают refresh.
+Evidence (gitignored, §9) — `var/artifacts/vp6/` + SHA-256 `MANIFEST_sha256.json`.
+
+Приватный loopback-стек обновлён: verified backup снят до миграции
+(`atlas-backup-*.tar.gz`, integrity+secret-scan OK); `docker compose build/up`;
+Core-entrypoint `alembic upgrade head` → **`0006_review_quality`**; данные
+сохранены (`audit_events` 656→663, потерь нет); Core non-root (UID 995), db во
+владении `atlas`; Core/Web/Runner **READY**. Reconcile на старте Core: **4
+профиля** (codex-plus-01/02, claude-pro-01/02) видны в живой UI на
+`http://127.0.0.1:3210` (live Chrome smoke — 8 скриншотов, 0 PII). Реальный
+provider Quality-E2E — отдельно под owner-гейтом (здесь не выполнялся; реальное и
+детерминированное evidence раздельны). LICENSE **не** добавлена (видимое
+owner-решение, firewall-gate эмитит info-finding); cookie-import — `UNSUPPORTED`.
+
 ## Требуют отдельного подтверждения владельца
 
 - Выбор LICENSE (кандидаты MIT/Apache-2.0; выбирается после reuse-аудита, §20.4).
-- Старт VP-6 (Review & Quality, §39) — отдельное решение владельца.
+- Старт VP-7 (Autonomy, GitHub & Time Machine, §40) — отдельное решение владельца.
 - Official login профилей (Codex CLI 0.146.0 уже установлен владельцем).
 - File Atelier increment, публичный release/tag, домен/TLS, активация cookie-импорта.
 
