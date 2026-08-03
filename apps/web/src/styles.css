@@ -39,7 +39,8 @@ body {
 
 .skip-link {
   position: absolute; left: -999px; top: 0; z-index: 20;
-  background: var(--ember); color: #14100c; padding: 8px 14px; border-radius: 0 0 8px 0; font-weight: 600;
+  background: var(--ember); color: #14100c; padding: 12px 16px; border-radius: 0 0 8px 0;
+  font-weight: 600; min-height: 44px; display: inline-flex; align-items: center;
 }
 .skip-link:focus { left: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible,
@@ -66,7 +67,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   padding: 9px 12px; font-size: 14px; cursor: pointer; font-weight: 500;
 }
 .nav-item:hover { background: var(--surface-2); color: var(--text); }
-.nav-item .nav-ico { width: 18px; text-align: center; color: var(--faint); }
+.nav-item .nav-ico { width: 18px; height: 18px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--faint); }
+.nav-item .nav-svg { display: block; }
+.nav-item:hover .nav-ico { color: var(--text); }
 .nav-item.active {
   background: color-mix(in srgb, var(--ember) 16%, transparent);
   color: var(--ember-strong); box-shadow: inset 2px 0 0 var(--ember);
@@ -492,4 +496,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .tr.tm-current, tr.tm-current { background: color-mix(in srgb, var(--ember) 7%, transparent); }
 tr.tm-current td { border-top: 1px solid color-mix(in srgb, var(--ember) 30%, transparent); }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+/* Route-переход контента (§28: 120–180 мс). Ключ по view — новый маунт. */
+.route-fade { animation: route-in 150ms ease both; }
+@keyframes route-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Loading-скелетоны (мягкий shimmer, graphite). */
+.skeleton { display: block; border-radius: 8px; background: var(--surface-2);
+  position: relative; overflow: hidden; min-height: 14px; }
+.skeleton::after { content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--faint) 22%, transparent), transparent);
+  transform: translateX(-100%); animation: skel 1200ms ease-in-out infinite; }
+.skeleton-row { height: 40px; margin-bottom: 8px; }
+@keyframes skel { to { transform: translateX(100%); } }
+
+/* Time Machine trace (§28: 400–600 мс) — safe replay в новую ветку. */
+.tm-trace { display: flex; align-items: center; gap: 0; margin: 10px 0; flex-wrap: wrap; }
+.tm-node { border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+  font-size: 12.5px; background: var(--surface-2); }
+.tm-node.src { color: var(--muted); }
+.tm-node.dst { color: var(--ember-strong); border-color: color-mix(in srgb, var(--ember) 40%, var(--border)); }
+.tm-arrow { position: relative; width: 40px; height: 2px; background: var(--border); overflow: hidden; }
+.tm-arrow::after { content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+  background: color-mix(in srgb, var(--ember) 60%, var(--border)); animation: tm-sweep 500ms ease-in-out infinite; }
+@keyframes tm-sweep { to { left: 100%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+  .skeleton::after, .tm-arrow::after { display: none; }
+}

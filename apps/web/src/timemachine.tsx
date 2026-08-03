@@ -48,12 +48,23 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
         <button className="btn" onClick={refresh}>{t("common.refresh")}</button>
       </header>
       {error && <p className="error" role="alert">{error}</p>}
-      {rows === null && !error && <p className="muted">{t("common.loading")}</p>}
+      {rows === null && !error && (
+        <div aria-busy="true" aria-label={t("common.loading")}>
+          <span className="skeleton skeleton-row" /><span className="skeleton skeleton-row" />
+          <span className="skeleton skeleton-row" />
+        </div>
+      )}
 
       <p className="muted field-hint">
         <span className="badge st-ok"><span aria-hidden="true">●</span> {t("tm.readOnly")}</span>{" "}
         {t("tm.replayNote")} {t("tm.noCredentials")}
       </p>
+      {/* Time Machine trace: источник → безопасная новая ветка (major-анимация) */}
+      <div className="tm-trace" role="img" aria-label={`${t("tm.sourceBranch")} → ${t("tm.safeBranch")}`}>
+        <span className="tm-node src">{t("tm.sourceBranch")}</span>
+        <span className="tm-arrow" aria-hidden="true" />
+        <span className="tm-node dst">{t("tm.safeBranch")} (atlas/replay-…)</span>
+      </div>
 
       {/* Хронология чекпоинтов */}
       <section className="panel" aria-labelledby="tl-h">

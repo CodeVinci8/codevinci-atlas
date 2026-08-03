@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type AuthHealthRow, type ProfileView } from "./api";
-import type { LocaleKey } from "./i18n";
+import type { Locale, LocaleKey } from "./i18n";
+import { fmtLocal, fmtRelative } from "./fmt";
 
 type T = (key: LocaleKey) => string;
 
@@ -42,7 +43,7 @@ function CapBadge({ status, t }: { status: string; t: T }) {
   return <span className={`badge ${cls}`} role="status"><span aria-hidden="true">◈</span> {t(key)}</span>;
 }
 
-export function ProfilesView({ t }: { t: T }) {
+export function ProfilesView({ t, locale }: { t: T; locale: Locale }) {
   const [rows, setRows] = useState<ProfileView[] | null>(null);
   const [summary, setSummary] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +109,14 @@ export function ProfilesView({ t }: { t: T }) {
                     <td><AuthBadge status={a.auth_status} /></td>
                     <td className="mono small">{a.source || "—"}</td>
                     <td className="summary">{a.reason || "—"}</td>
-                    <td className="mono small">{a.observed_at ? a.observed_at.slice(0, 19).replace("T", " ") : "—"}</td>
+                    <td className="small">
+                      {a.observed_at
+                        ? <time dateTime={a.observed_at} title={`${a.observed_at} UTC`}>
+                            {fmtLocal(a.observed_at, locale)}{" "}
+                            <span className="muted rel">· {fmtRelative(a.observed_at, locale)}</span>
+                          </time>
+                        : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

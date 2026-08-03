@@ -11,6 +11,7 @@ import { ProfilesView } from "./profiles";
 import { QualityView } from "./quality";
 import { AutonomyView } from "./autonomy";
 import { TimeMachineView } from "./timemachine";
+import { NavIcon, type IconName } from "./icons";
 import { fmtBytes, fmtDuration, fmtLocal, fmtRelative } from "./fmt";
 import type { NextAction, SystemSummary } from "./api";
 
@@ -108,25 +109,27 @@ export function App() {
             <strong>{t("common.offline")}</strong> — {t("common.offlineHint")}
           </div>
         )}
-        {selected ? (
-          <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
-        ) : view === "pulse" ? (
-          <PulseView t={t} locale={locale} />
-        ) : view === "portfolio" ? (
-          <PortfolioView t={t} onOpen={setSelected} />
-        ) : view === "runs" ? (
-          <RunsView t={t} />
-        ) : view === "profiles" ? (
-          <ProfilesView t={t} />
-        ) : view === "quality" ? (
-          <QualityView t={t} locale={locale} />
-        ) : view === "autonomy" ? (
-          <AutonomyView t={t} locale={locale} />
-        ) : view === "timemachine" ? (
-          <TimeMachineView t={t} locale={locale} />
-        ) : (
-          <ProjectsView t={t} onOpen={setSelected} />
-        )}
+        <div className="route-fade" key={selected ? `p:${selected}` : view}>
+          {selected ? (
+            <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
+          ) : view === "pulse" ? (
+            <PulseView t={t} locale={locale} />
+          ) : view === "portfolio" ? (
+            <PortfolioView t={t} onOpen={setSelected} />
+          ) : view === "runs" ? (
+            <RunsView t={t} />
+          ) : view === "profiles" ? (
+            <ProfilesView t={t} locale={locale} />
+          ) : view === "quality" ? (
+            <QualityView t={t} locale={locale} />
+          ) : view === "autonomy" ? (
+            <AutonomyView t={t} locale={locale} />
+          ) : view === "timemachine" ? (
+            <TimeMachineView t={t} locale={locale} />
+          ) : (
+            <ProjectsView t={t} onOpen={setSelected} />
+          )}
+        </div>
       </main>
     </div>
   );
@@ -137,13 +140,13 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
   t: T; locale: Locale; setLocale: (l: Locale) => void;
   view: string; onNav: (v: NavView) => void;
 }) {
-  const item = (id: NavView, label: string, sym: string) => (
+  const item = (id: NavView, label: string, icon: IconName) => (
     <button
       className={`nav-item ${view === id ? "active" : ""}`}
       aria-current={view === id ? "page" : undefined}
       onClick={() => onNav(id)}
     >
-      <span className="nav-ico" aria-hidden="true">{sym}</span> {label}
+      <span className="nav-ico" aria-hidden="true"><NavIcon name={icon} /></span> {label}
     </button>
   );
   return (
@@ -159,14 +162,14 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
         </span>
       </button>
       <nav className="nav" aria-label={t("nav.projects")}>
-        {item("pulse", t("nav.pulse"), "◈")}
-        {item("projects", t("nav.projects"), "▤")}
-        {item("profiles", t("nav.profiles"), "◈")}
-        {item("runs", t("nav.runs"), "▶")}
-        {item("quality", t("nav.quality"), "◇")}
-        {item("autonomy", t("nav.autonomy"), "⛨")}
-        {item("timemachine", t("nav.timemachine"), "◷")}
-        {item("portfolio", t("nav.portfolio"), "◫")}
+        {item("pulse", t("nav.pulse"), "pulse")}
+        {item("projects", t("nav.projects"), "projects")}
+        {item("profiles", t("nav.profiles"), "profiles")}
+        {item("runs", t("nav.runs"), "runs")}
+        {item("quality", t("nav.quality"), "quality")}
+        {item("autonomy", t("nav.autonomy"), "autonomy")}
+        {item("timemachine", t("nav.timemachine"), "timemachine")}
+        {item("portfolio", t("nav.portfolio"), "portfolio")}
       </nav>
       <LangSwitch t={t} locale={locale} setLocale={setLocale} />
     </aside>
