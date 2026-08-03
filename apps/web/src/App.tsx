@@ -9,10 +9,13 @@ import { WorkOrdersView } from "./workorders";
 import { RunsView } from "./runs";
 import { ProfilesView } from "./profiles";
 import { QualityView } from "./quality";
+import { AutonomyView } from "./autonomy";
+import { TimeMachineView } from "./timemachine";
 import { fmtBytes, fmtDuration, fmtLocal, fmtRelative } from "./fmt";
-import type { SystemSummary } from "./api";
+import type { NextAction, SystemSummary } from "./api";
 
-type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles" | "quality";
+type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles" | "quality"
+  | "autonomy" | "timemachine";
 
 type T = (key: LocaleKey) => string;
 function useT(locale: Locale): T {
@@ -117,6 +120,10 @@ export function App() {
           <ProfilesView t={t} />
         ) : view === "quality" ? (
           <QualityView t={t} locale={locale} />
+        ) : view === "autonomy" ? (
+          <AutonomyView t={t} locale={locale} />
+        ) : view === "timemachine" ? (
+          <TimeMachineView t={t} locale={locale} />
         ) : (
           <ProjectsView t={t} onOpen={setSelected} />
         )}
@@ -141,23 +148,41 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
   );
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark" aria-hidden="true">◆</span>
+      <button type="button" className="brand brand-home" aria-label={t("brand.home")}
+        title={t("brand.home")} onClick={() => onNav("pulse")}>
+        <span className="brand-mark" aria-hidden="true">
+          <BrandMark />
+        </span>
         <span className="brand-text">
           <strong>{t("app.title")}</strong>
           <span className="muted">{t("app.subtitle")}</span>
         </span>
-      </div>
+      </button>
       <nav className="nav" aria-label={t("nav.projects")}>
         {item("pulse", t("nav.pulse"), "◈")}
         {item("projects", t("nav.projects"), "▤")}
         {item("profiles", t("nav.profiles"), "◈")}
         {item("runs", t("nav.runs"), "▶")}
         {item("quality", t("nav.quality"), "◇")}
+        {item("autonomy", t("nav.autonomy"), "⛨")}
+        {item("timemachine", t("nav.timemachine"), "◷")}
         {item("portfolio", t("nav.portfolio"), "◫")}
       </nav>
       <LangSwitch t={t} locale={locale} setLocale={setLocale} />
     </aside>
+  );
+}
+
+// Оригинальная марка Atlas (CodeVinci Ember): компас/ромб, графит + ember-акцент.
+function BrandMark() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="#141416" stroke="#2a2928" />
+      <path d="M16 5.5 26.5 16 16 26.5 5.5 16 16 5.5Z" stroke="#3a3936" strokeWidth="1.1" fill="none" />
+      <path d="M16 9.2 20 16 16 22.8 12 16 16 9.2Z" fill="#f28a3d" fillOpacity="0.16"
+        stroke="#f28a3d" strokeWidth="1.3" strokeLinejoin="round" />
+      <circle cx="16" cy="16" r="1.9" fill="#ffad66" />
+    </svg>
   );
 }
 
@@ -619,6 +644,44 @@ function Meter({ label, used, total, na }: {
   );
 }
 
+// Контекстное продуктовое next action (сервер вычисляет код; UI локализует).
+function nextActionText(na: NextAction | undefined, t: T): string {
+  if (!na) return t("sys.okAll");
+  const base = t((`na.${na.code}`) as LocaleKey) ?? na.text;
+  return na.count ? `${base} (${na.count})` : base;
+}
+
+// Реальная CPU-утилизация: компактное кольцо + текст + порог-символ (не только цвет).
+function CpuGauge({ pct, window, na, label }: {
+  pct: number | null; window: number | null; na: string; label: string;
+}) {
+  const level = pct === null ? "muted" : pct >= 90 ? "crit" : pct >= 75 ? "warn" : "ok";
+  const sym = level === "crit" ? "■" : level === "warn" ? "▲" : level === "ok" ? "●" : "○";
+  const r = 16, c = 2 * Math.PI * r;
+  const frac = pct === null ? 0 : Math.max(0, Math.min(1, pct / 100));
+  const stroke = level === "crit" ? "var(--danger)" : level === "warn" ? "var(--warn)"
+    : level === "ok" ? "var(--ember)" : "var(--border)";
+  return (
+    <div className="cpu-gauge">
+      <svg width="52" height="52" viewBox="0 0 44 44" role="img"
+        aria-label={`${label}: ${pct === null ? na : pct + "%"}`}>
+        <circle cx="22" cy="22" r={r} fill="none" stroke="var(--border)" strokeWidth="4" />
+        <circle cx="22" cy="22" r={r} fill="none" stroke={stroke} strokeWidth="4"
+          strokeDasharray={`${(c * frac).toFixed(1)} ${c.toFixed(1)}`} strokeLinecap="round"
+          transform="rotate(-90 22 22)" />
+      </svg>
+      <div className="cpu-txt">
+        <span className="kpi-label">{label}</span>
+        <span className={`cpu-val mono st-${level === "ok" ? "ok" : level === "warn" ? "warn" : level === "crit" ? "danger" : "muted"}`}>
+          <span aria-hidden="true">{sym}</span> {pct === null ? na : `${pct}%`}
+        </span>
+        {pct !== null && window !== null && (
+          <span className="muted field-hint">{window.toFixed(1)}s ·  /proc/stat</span>)}
+      </div>
+    </div>
+  );
+}
+
 // Человекочитаемая семья события Audit (§VP6-D3): канонический код сохраняется.
 function auditFamily(eventType: string, t: T): string {
   const head = (eventType.split(".")[0] || "").toLowerCase();
@@ -711,11 +774,8 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
             : <span className="muted">{t("sys.noActive")}</span>}
         </p>
         <div className="next-action">
-          <span className="na-label">{t("overview.nextAction")}</span>
-          <span className="na-text">
-            {ownerReq > 0 ? `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}`
-              : risks.length === 0 ? t("sys.okAll") : risks[0].text}
-          </span>
+          <span className="na-label">{t("sys.nextAction")}</span>
+          <span className="na-text">{nextActionText(sys?.next_action, t)}</span>
         </div>
       </section>
 
@@ -755,16 +815,12 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
         )}
         {sys && (
           <div className="res-grid">
+            <CpuGauge pct={sys.cpu.utilization_pct} window={sys.cpu.sample_window_s}
+                      na={t("sys.cpuUnavailable")} label={t("sys.cpu")} />
             <Meter label={t("sys.memory")} used={sys.memory.used_bytes}
                    total={sys.memory.total_bytes} na={na} />
             <Meter label={t("sys.disk")} used={sys.disk.used_bytes}
                    total={sys.disk.total_bytes} na={na} />
-            <div className="kpi">
-              <span className="kpi-label">{t("sys.loadLabel")}</span>
-              <span className="kpi-val mono">{sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na}</span>
-              <span className="muted field-hint">{t("sys.loadNote")}
-                {sys.cpu.logical_cores !== null && ` · ${sys.cpu.logical_cores} ${t("sys.cores")}`}</span>
-            </div>
           </div>
         )}
       </section>
@@ -788,6 +844,12 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
               value={sys.leases.worktree_writers !== null ? String(sys.leases.worktree_writers) : t("common.unknown")} />
             <Kpi label={t("sys.profileLeases")}
               value={sys.leases.profile_leases !== null ? String(sys.leases.profile_leases) : t("common.unknown")} />
+            <div className="kpi">
+              <span className="kpi-label">{t("sys.loadLabel")}</span>
+              <span className="kpi-val mono">{sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na}</span>
+              <span className="muted field-hint">{t("sys.loadNote")}
+                {sys.cpu.logical_cores !== null && ` · ${sys.cpu.logical_cores} ${t("sys.cores")}`}</span>
+            </div>
           </div>
           <p className="muted field-hint">{t("sys.web")}: {t("common.unknown")} — {t("sys.webBackend")}</p>
           <p className="muted field-hint">{t("sys.lastRefresh")}:{" "}

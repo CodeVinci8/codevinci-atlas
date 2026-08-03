@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ProfileView } from "./api";
+import { api, type AuthHealthRow, type ProfileView } from "./api";
 import type { LocaleKey } from "./i18n";
 
 type T = (key: LocaleKey) => string;
+
+const AUTH_CLS: Record<string, { sym: string; cls: string }> = {
+  READY: { sym: "●", cls: "st-ok" },
+  AUTH_REQUIRED: { sym: "▲", cls: "st-warn" },
+  AUTH_EXPIRED: { sym: "◆", cls: "st-warn" },
+  STALE: { sym: "◇", cls: "st-muted" },
+  UNKNOWN: { sym: "○", cls: "st-muted" },
+};
+function AuthBadge({ status }: { status: string }) {
+  const m = AUTH_CLS[status] ?? { sym: "○", cls: "st-muted" };
+  return <span className={`badge ${m.cls}`} role="status"><span aria-hidden="true">{m.sym}</span> {status}</span>;
+}
 
 const STATE_CLS: Record<string, { sym: string; cls: string }> = {
   READY: { sym: "●", cls: "st-ok" },
@@ -36,10 +48,12 @@ export function ProfilesView({ t }: { t: T }) {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<"cards" | "table">("cards");
   const [filter, setFilter] = useState<string>("");
+  const [authHealth, setAuthHealth] = useState<AuthHealthRow[]>([]);
 
   const refresh = useCallback(async () => {
     try { const r = await api.listProfiles(); setRows(r.profiles); setSummary(r.summary); setError(null); }
     catch { setError(t("common.error")); }
+    try { setAuthHealth((await api.authHealthReport()).auth_health); } catch { /* optional */ }
   }, [t]);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -73,6 +87,34 @@ export function ProfilesView({ t }: { t: T }) {
               <span className="mono muted"> {summary[k]}</span></span>
           ))}
         </div>
+      )}
+
+      {authHealth.length > 0 && (
+        <section className="panel" aria-labelledby="ah-h">
+          <h2 id="ah-h">{t("ah.title")}</h2>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead><tr>
+                <th scope="col">{t("profiles.col.alias")}</th>
+                <th scope="col">{t("profiles.col.state")}</th>
+                <th scope="col">{t("ah.source")}</th>
+                <th scope="col">{t("auto.reason")}</th>
+                <th scope="col">{t("ah.observed")}</th>
+              </tr></thead>
+              <tbody>
+                {authHealth.map((a) => (
+                  <tr key={a.alias}>
+                    <td className="mono">{a.alias}</td>
+                    <td><AuthBadge status={a.auth_status} /></td>
+                    <td className="mono small">{a.source || "—"}</td>
+                    <td className="summary">{a.reason || "—"}</td>
+                    <td className="mono small">{a.observed_at ? a.observed_at.slice(0, 19).replace("T", " ") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       <label className="field inline filter-field">

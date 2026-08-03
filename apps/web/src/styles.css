@@ -444,4 +444,52 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .q-filters { gap: 8px; }
 }
 
+/* --- VP-7 Autonomy, GitHub & Time Machine ------------------------------- */
+/* Brand как keyboard-accessible home-link (§26): выглядит как заголовок, но
+   реагирует на фокус/hover и не перезагружает приложение. */
+.brand-home {
+  display: flex; align-items: center; gap: 10px; padding: 6px;
+  width: 100%; background: transparent; border: 1px solid transparent;
+  border-radius: 10px; cursor: pointer; text-align: left; color: inherit;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.brand-home:hover { background: color-mix(in srgb, var(--ember) 8%, transparent); }
+.brand-home:focus-visible {
+  outline: none; border-color: var(--ember);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 35%, transparent);
+}
+.brand-mark svg { display: block; }
+
+.small { font-size: 12px; }
+
+/* Режимы автономии */
+.mode-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-top: 8px; }
+.mode-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
+}
+.mode-name { font-size: 13px; font-weight: 600; color: var(--ember); letter-spacing: .02em; }
+
+/* CPU-кольцо (реальная утилизация) */
+.cpu-gauge {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px;
+}
+.cpu-txt { display: flex; flex-direction: column; gap: 2px; }
+.cpu-val { font-size: 15px; font-weight: 600; }
+
+/* Chip-toggle (capability выбор, compare-выбор) */
+.chip.toggle { cursor: pointer; user-select: none; }
+.chip.toggle input { margin-right: 6px; vertical-align: middle; accent-color: var(--ember); }
+.chip.toggle.on { border-color: var(--ember); background: color-mix(in srgb, var(--ember) 12%, transparent); }
+
+/* Emergency Stop активен — тревожное (не ember) свечение */
+.estop-on { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)) !important; }
+.estop-on.na-glow { box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent),
+                                0 8px 30px -12px color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* Текущий чекпоинт в Time Machine */
+.tr.tm-current, tr.tm-current { background: color-mix(in srgb, var(--ember) 7%, transparent); }
+tr.tm-current td { border-top: 1px solid color-mix(in srgb, var(--ember) 30%, transparent); }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
