@@ -385,16 +385,40 @@ class GitHubAdapter:
     contract: GitContract = field(default_factory=GitContract)
     enforce_grant: bool = True
 
+    def __post_init__(self) -> None:
+        # Bypass A (fail-closed на этапе конструирования): реальный GhForge
+        # (production write-путь) НИКОГДА не работает с отключённым grant-
+        # энфорсментом. ``enforce_grant=False`` допустим ТОЛЬКО для
+        # детерминированных LocalForge-тестов — с GhForge это запрещено, чтобы
+        # test-only границу нельзя было переключить в production.
+        if not self.enforce_grant and isinstance(self.forge, GhForge):
+            raise GitContractError(
+                "GRANT_ENFORCEMENT_REQUIRED",
+                "enforce_grant=False недопустим с реальным GhForge (production write-путь)")
+
     def auth_status(self) -> dict:
         return self.forge.auth_status()
 
     def repo_metadata(self) -> dict:
         return self.forge.repo_metadata()
 
-    def _consume(self, grant_id: str, capability: str, correlation_id: str = "") -> None:
-        """Проверить grant (capability+scope) и списать invocation-бюджет за
-        реальную write/merge-операцию (VP-7 D-fix). Fail-closed: отсутствующий/
-        исчерпанный/несоответствующий grant → GitContractError."""
+    def _forge_repo(self) -> str | None:
+        """Имя удалённого repo (owner/name) активного forge — для проверки
+        точного repo-scope grant на write/merge-операциях."""
+        f = self.forge
+        if isinstance(f, GhForge):
+            return f.repo
+        if isinstance(f, LocalForge):
+            return f.repo_name
+        return None
+
+    def _consume(self, grant_id: str, capability: str, correlation_id: str = "",
+                 *, repo: str | None = None, base: str | None = None) -> None:
+        """Проверить grant (capability + **точный scope** repo/base) и списать
+        invocation-бюджет за реальную write/merge-операцию (VP-7 D-fix). Fail-
+        closed: отсутствующий/исчерпанный/несоответствующий grant → GitContractError.
+        Scope repo/base передаётся в :func:`autonomy.evaluate`, поэтому grant,
+        не покрывающий этот repo/base, отвергается (не только «капабилити есть»)."""
         if not grant_id:
             if self.enforce_grant:
                 raise GitContractError(
@@ -402,7 +426,7 @@ class GitHubAdapter:
                     f"операция {capability} требует явный grant (capability+scope+budget)")
             return  # только явная test-only граница (enforce_grant=False)
         from . import autonomy
-        dec = autonomy.evaluate(capability, grant_id=grant_id)
+        dec = autonomy.evaluate(capability, grant_id=grant_id, repo=repo, base=base)
         if not dec.permitted:
             raise GitContractError(dec.reason_code, dec.next_action)
         try:
@@ -426,7 +450,7 @@ class GitHubAdapter:
         self.contract.assert_feature_branch(branch)
         if force:
             raise self.contract.reject_force()
-        self._consume(grant_id, "push_feature", correlation_id)
+        self._consume(grant_id, "push_feature", correlation_id, repo=self._forge_repo())
         local_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         audit.record("github.push.before", f"branch={branch} sha={local_sha[:12]}",
                      correlation_id=correlation_id)
@@ -447,7 +471,7 @@ class GitHubAdapter:
         self.contract.assert_russian(title)
         audit.record("github.pr.before", f"head={head_branch} base={base}",
                      correlation_id=correlation_id)
-        self._consume(grant_id, "create_pr", correlation_id)
+        self._consume(grant_id, "create_pr", correlation_id, repo=self._forge_repo(), base=base)
         pr = self.forge.open_pr(base=base, head_branch=head_branch, head_sha=head_sha,
                                 title=title, body=body)
         audit.record("github.pr.after", f"pr=#{pr.number} state={pr.state}",
@@ -469,7 +493,10 @@ class GitHubAdapter:
         """Squash-merge ТОЛЬКО после решения merge gate (см. merge_gate).
         Здесь энфорсится stale-head защита, RU-сообщение и списание бюджета."""
         self.contract.assert_russian(message)
-        self._consume(grant_id, "merge_after_pass", correlation_id)
+        pr_for_scope = self.forge.get_pr(number)
+        self._consume(grant_id, "merge_after_pass", correlation_id,
+                      repo=self._forge_repo(),
+                      base=(pr_for_scope.base if pr_for_scope else None))
         name, email = self.contract.expected_author_name, ""
         if isinstance(self.forge, LocalForge):
             try:  # автор squash-коммита в bare-remote — общая идентичность репо-хоста

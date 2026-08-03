@@ -149,6 +149,7 @@ class VP7:
             self.c9_12_emergency()
             self.c13_16_github()
             self.c17_20_merge_gate()
+            self.c34_authoritative_merge()
             self.c21_audit()
             self.c22_23_checkpoint()
             self.c24_replay()
@@ -381,6 +382,46 @@ class VP7:
         self.rec(20, "Current-head PASS + green + grant разрешает bounded merge",
                  permit.permitted and merged.get("merged") and base_advanced,
                  f"permit={permit.permitted} merged={merged.get('merged')}")
+
+    # ---- #34 авторитетный merge грузит RP/QR из хранилища (bypass C) ------
+    def c34_authoritative_merge(self):
+        from atlas_core.merge_gate import evaluate_merge_authoritative
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        g = self._grant(environment="synthetic", allowed_repos=["acme/demo"], allowed_bases=["main"])
+
+        def _rp_qr(head, verdict):
+            pkg = build_review_package(ReviewInputs(
+                project_id="proj_v7", run_id="run_auth", wo_key="VP-7", vp_key="VP-7",
+                branch="atlas/vp-7-a", base_sha="B", head_sha=head, impact_class="LOCAL",
+                claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+            rep = QualityService().build_report(pkg, verdict, "", [], run_id="run_auth")
+            return pkg, rep
+
+        def _call(rp_id, head="HEADA", qr_id=""):
+            return evaluate_merge_authoritative(
+                repo="acme/demo", base="main", branch="atlas/vp-7-a", head_sha=head,
+                project_id="proj_v7", grant_id=g["id"], review_package_id=rp_id,
+                quality_report_id=qr_id, environment="synthetic",
+                checks={"head_sha": head, "state": "GREEN"},
+                mergeability={"mergeable": True, "state": "CLEAN"}, pr_number=1)
+
+        ok_pkg, ok_rep = _rp_qr("HEADA", "PASS")
+        permit = _call(ok_pkg["id"], qr_id=ok_rep["id"])            # валидный stored → permit
+        stale_pkg, stale_rep = _rp_qr("OLD", "PASS")
+        stale = _call(stale_pkg["id"], head="HEADA", qr_id=stale_rep["id"])  # stored stale → deny
+        missing = _call("rpkg_nope")                                 # нет в хранилище → deny
+        empty = _call("")                                            # пустой id → deny
+        mism = _call(ok_pkg["id"], qr_id="qrep_wrong")               # caller qr_id ≠ stored → deny
+        self.art("c34_authoritative_merge.json", {
+            "permit": permit.reason_code, "stale": stale.reason_code,
+            "missing": missing.reason_code, "empty": empty.reason_code,
+            "mismatch": mism.reason_code})
+        self.rec(34, "Авторитетный merge грузит RP/QR из хранилища (caller-id недостаточно)",
+                 permit.permitted and not stale.permitted and stale.reason_code == "REVIEW_PACKAGE_INVALID"
+                 and missing.reason_code == "REVIEW_PACKAGE_INVALID" and not empty.permitted
+                 and not mism.permitted,
+                 f"permit={permit.permitted} stale={stale.reason_code} mismatch={mism.reason_code}")
 
     # ---- #21 audit completeness ------------------------------------------
     def c21_audit(self):

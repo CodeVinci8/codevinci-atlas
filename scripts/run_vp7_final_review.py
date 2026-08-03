@@ -246,21 +246,23 @@ def main():
     pkg, outcome = _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat)
     print(f"  Quality verdict: {outcome.verdict} gate={outcome.gate_fired}")
 
-    # реальный STANDARD merge gate
+    # реальный STANDARD merge gate — АВТОРИТЕТНЫЙ путь: RP/QR грузятся из хранилища
+    # по id (не из caller-словаря), §2.C. Совпадения id недостаточно для merge.
     from atlas_core.autonomy import create_grant
-    from atlas_core.merge_gate import MergeRequest, evaluate_merge
+    from atlas_core.merge_gate import evaluate_merge_authoritative
     grant = create_grant(project_id="proj_vp7", mode="STANDARD",
                          capabilities=["repo_read", "commit", "push_feature", "create_pr", "merge_after_pass"],
                          environment="atlas-main", allowed_repos=[repo], allowed_bases=[base],
                          reason="Закрытие VP-7: bounded squash-merge после current-head PASS.")
     checks = gh_checks_state(repo, head)
     merge = gh_mergeability(repo, pr)
-    gate = evaluate_merge(MergeRequest(
+    gate = evaluate_merge_authoritative(
         repo=repo, base=base, branch="atlas/vp-7-autonomy-github-time-machine", head_sha=head,
         project_id="proj_vp7", grant_id=grant["id"], environment="atlas-main",
-        review_package=pkg, quality_report=outcome.report, checks=checks, mergeability=merge,
-        baseline_known=True, diff_in_scope=True, owner_gate_pending=False, pr_number=pr))
-    print(f"  Merge gate: {gate.reason_code} permitted={gate.permitted}")
+        review_package_id=pkg["id"], quality_report_id=outcome.report["id"],
+        checks=checks, mergeability=merge, baseline_known=True, diff_in_scope=True,
+        owner_gate_pending=False, pr_number=pr)
+    print(f"  Merge gate (authoritative, RP/QR из хранилища): {gate.reason_code} permitted={gate.permitted}")
 
     evidence = {
         "repo": repo, "base": base, "head_sha": head, "pr": pr,

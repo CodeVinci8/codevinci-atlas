@@ -181,3 +181,63 @@ def evaluate_merge(req: MergeRequest, *, correlation_id: str = "") -> MergeGateD
                  f"decision=PERMIT head={req.head_sha[:12]} pr=#{req.pr_number}",
                  correlation_id=correlation_id)
     return MergeGateDecision(True, G_PERMITTED, next_action(G_PERMITTED), conditions)
+
+
+def evaluate_merge_authoritative(
+        *, repo: str, base: str, branch: str, head_sha: str, project_id: str, grant_id: str,
+        review_package_id: str, quality_report_id: str = "", environment: str = "",
+        checks: dict | None = None, mergeability: dict | None = None,
+        baseline_known: bool = True, diff_in_scope: bool = True,
+        owner_gate_pending: bool = False, pr_number: int = 0,
+        correlation_id: str = "") -> MergeGateDecision:
+    """Авторитетная оценка merge для **реальной** merge-операции (§20.2, §2.C).
+
+    ReviewPackage и QualityReport **загружаются из хранилища Atlas по id** и
+    ре-валидируются по факту (текущий head), а НЕ берутся из caller-словаря.
+    Совпадения id, переданных каллером, **недостаточно** для авторизации merge —
+    авторитетное содержимое приходит только из БД. Caller-supplied evidence
+    допустимо лишь в диагностическом preview (`evaluate_merge`).
+
+    Fail-closed: пустой ``review_package_id``, отсутствие пакета/отчёта в
+    хранилище, инвалидация пакета по факту, несовпадение переданного
+    ``quality_report_id`` с последним отчётом пакета — deny со стабильным кодом.
+    """
+    from . import reviewpkg
+    from .quality import QualityService
+
+    def _deny(code: str, detail: str) -> MergeGateDecision:
+        audit.record("merge.gate.after",
+                     f"decision=DENY code={code} head={head_sha[:12]} (authoritative)",
+                     correlation_id=correlation_id)
+        return MergeGateDecision(False, code, next_action(code),
+                                 [{"code": code, "ok": False, "detail": detail}])
+
+    # 1. RP обязателен и должен существовать в хранилище.
+    if not review_package_id:
+        return _deny(G_STALE_REVIEW, "review_package_id обязателен для авторитетного merge")
+    rp = reviewpkg.get_review_package(review_package_id)
+    if rp is None:
+        return _deny(G_INVALID_REVIEW, "ReviewPackage не найден в хранилище")
+
+    # 2. Ре-валидация по факту (текущий head) переводит stale/tampered в invalid.
+    facts = reviewpkg.ReviewFacts(current_head=head_sha)
+    valid, code, _reason = reviewpkg.validate_review_package(review_package_id, facts)
+    rp = reviewpkg.get_review_package(review_package_id)  # перечитать после инвалидции
+    if not valid:
+        return _deny(G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}")
+
+    # 3. QualityReport — последний для этого RP из хранилища (не caller-dict).
+    qr = QualityService().latest_report(review_package_id)
+    if qr is None:
+        return _deny(G_NOT_PASS, "нет QualityReport для ReviewPackage в хранилище")
+    if quality_report_id and qr.get("id") != quality_report_id:
+        return _deny(G_STALE_REVIEW,
+                     f"quality_report_id {quality_report_id} != последний отчёт {qr.get('id')}")
+
+    # 4. Оценить полный gate по АВТОРИТЕТНЫМ RP/QR из хранилища.
+    return evaluate_merge(MergeRequest(
+        repo=repo, base=base, branch=branch, head_sha=head_sha, project_id=project_id,
+        grant_id=grant_id, environment=environment, review_package=rp, quality_report=qr,
+        checks=checks or {}, mergeability=mergeability or {}, baseline_known=baseline_known,
+        diff_in_scope=diff_in_scope, owner_gate_pending=owner_gate_pending,
+        pr_number=pr_number), correlation_id=correlation_id)

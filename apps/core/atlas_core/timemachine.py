@@ -191,12 +191,17 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     ветку**, НЕ переписывая/не сбрасывая source-ветку, НЕ переиспользуя stale
     grant, verify хешей, без восстановления credentials/transcripts.
 
-    Fail-closed (VP-7 D-fix, bypass B): scope **выводится из checkpoint и
-    хранимого project/source** (доверенный источник), а НЕ из аргументов каллера.
-    Каллер-supplied repo/base/environment могут только **совпасть/сузить**, но
-    никогда не расширяют scope. Grant должен разрешать ``repo_write`` в этом
-    выведенном scope через :func:`autonomy.evaluate`. Emergency Stop (§19)
-    запрещает replay как создание нового job."""
+    Fail-closed (VP-7 D-fix, bypass B): весь authoritative scope **выводится из
+    checkpoint и хранимого project/source** (доверенный источник), а НЕ из
+    аргументов каллера. Каллер-supplied ``repo`` может только **совпасть** с
+    доверенным (или быть опущен) — никогда не расширяет и не подменяет scope.
+    ``base``/``environment`` для replay из checkpoint **не выводятся** (в
+    checkpoint есть только ``base_sha`` — не base-ветка; replay не деплоит),
+    поэтому любое непустое caller-значение отвергается fail-closed
+    (``BASE_NOT_DERIVABLE``/``ENVIRONMENT_NOT_DERIVABLE``) — не «тихо пропускаем
+    сравнение». Grant должен разрешать ``repo_write`` в выведенном scope через
+    :func:`autonomy.evaluate`. Emergency Stop (§19) запрещает replay как создание
+    нового job."""
     cp = _verify_or_raise(checkpoint_id)
 
     # Emergency Stop: replay создаёт новый Run → запрещён при активном стопе.
@@ -217,17 +222,32 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     if g.get("project_id") and trusted_project and g["project_id"] != trusted_project:
         raise TimeMachineError("PROJECT_MISMATCH",
                                "grant привязан к другому проекту, чем checkpoint")
-    # Каллер не может расширить scope: указанный repo/base/env обязан совпасть с
-    # доверенным (если доверенное известно). Иначе — отказ.
+    # Каллер-repo может только совпасть с доверенным; если доверенный repo не
+    # выводим (не github-source) — caller-repo недопустим (не даём утверждать то,
+    # что нельзя проверить). eval_repo — ТОЛЬКО доверенный (без fallback на каллера).
     if repo is not None and trusted_repo and repo != trusted_repo:
         raise TimeMachineError("REPO_MISMATCH",
                                "caller repo не совпадает с repo checkpoint/project")
-    eval_repo = trusted_repo or repo  # доверенное имеет приоритет
+    if repo is not None and not trusted_repo:
+        raise TimeMachineError("REPO_NOT_DERIVABLE",
+                               "доверенный repo не выводим из project — caller repo недопустим")
+    eval_repo = trusted_repo  # None → repo-scope каллером не утверждается
+
+    # base/environment не выводятся из checkpoint → непустое caller-значение = отказ.
+    if base:
+        raise TimeMachineError(
+            "BASE_NOT_DERIVABLE",
+            "replay не принимает caller base: доверенная base-ветка не выводима из checkpoint")
+    if environment:
+        raise TimeMachineError(
+            "ENVIRONMENT_NOT_DERIVABLE",
+            "replay не деплоит: caller environment недопустим (scope не выводится из каллера)")
 
     # Grant должен явно разрешать repo_write в выведенном scope (не только «свежий»).
+    # base/environment=None: authoritative-dimension для replay отсутствует.
     dec = autonomy.evaluate(Capability.REPO_WRITE.value, grant_id=grant_id,
-                            project_id=trusted_project, repo=eval_repo, base=base,
-                            environment=environment)
+                            project_id=trusted_project, repo=eval_repo, base=None,
+                            environment=None)
     if not dec.permitted:
         raise TimeMachineError(dec.reason_code,
                                f"replay требует capability repo_write в выведенном scope ({dec.reason_code})")

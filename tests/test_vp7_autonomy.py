@@ -276,6 +276,88 @@ class TestGithubAdapter(VP7Base):
             prod.push_feature(self.wc, "atlas/vp-7-x")  # без grant_id
         self.assertEqual(cm.exception.code, "GRANT_REQUIRED")
 
+    # --- Bypass A: enforce_grant=False недопустим с реальным GhForge (guard) ---
+    def test_enforce_grant_false_forbidden_with_ghforge(self):
+        from atlas_core.github_adapter import (
+            GhForge,
+            GitContract,
+            GitContractError,
+            GitHubAdapter,
+        )
+        with self.assertRaises(GitContractError) as cm:
+            GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract(),
+                          enforce_grant=False)
+        self.assertEqual(cm.exception.code, "GRANT_ENFORCEMENT_REQUIRED")
+        # с enforce_grant=True (default) реальный GhForge конструируется штатно
+        GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract())
+
+    # --- Bypass A: ВСЕ production write-категории требуют grant (не только push) ---
+    def test_production_all_write_categories_require_grant(self):
+        from atlas_core.github_adapter import GitContract, GitContractError, GitHubAdapter
+        prod = GitHubAdapter(forge=self.forge, contract=GitContract())  # enforce_grant=True
+        subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
+        Path(self.wc, "f.py").write_text("x=1")
+        # commit
+        with self.assertRaises(GitContractError) as c1:
+            prod.commit(self.wc, "VP-7: без grant")
+        self.assertEqual(c1.exception.code, "GRANT_REQUIRED")
+        # create_pr
+        with self.assertRaises(GitContractError) as c2:
+            prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha="H",
+                           title="VP-7 демо", body="тело")
+        self.assertEqual(c2.exception.code, "GRANT_REQUIRED")
+        # squash_merge (сообщение на русском, чтобы дойти до grant-проверки)
+        with self.assertRaises(GitContractError) as c3:
+            prod.squash_merge(1, expected_head="H", message="VP-7: слияние без гранта")
+        self.assertEqual(c3.exception.code, "GRANT_REQUIRED")
+
+    # --- Bypass A: exact repo/base scope энфорсится на write (не только капабилити) ---
+    def test_production_exact_repo_scope_enforced(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContract, GitContractError, GitHubAdapter
+        prod = GitHubAdapter(forge=self.forge, contract=GitContract())  # forge repo = acme/demo
+        self._feature_prod(prod)
+        # grant с нужной капабилити, но scoped к ДРУГОМУ repo → push денит REPO_NOT_ALLOWED
+        g = create_grant(project_id="p", mode="STANDARD",
+                         capabilities=["push_feature", "create_pr"],
+                         allowed_repos=["other/repo"], allowed_bases=["main"], reason="scope")
+        with self.assertRaises(GitContractError) as cm:
+            prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        self.assertEqual(cm.exception.code, "REPO_NOT_ALLOWED")
+        # base вне allowlist → create_pr денит BASE_NOT_ALLOWED
+        g2 = create_grant(project_id="p", mode="STANDARD", capabilities=["create_pr"],
+                          allowed_repos=["acme/demo"], allowed_bases=["release"], reason="scope")
+        with self.assertRaises(GitContractError) as cm2:
+            prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha="H",
+                           title="VP-7 демо", body="тело", grant_id=g2["id"])
+        self.assertEqual(cm2.exception.code, "BASE_NOT_ALLOWED")
+
+    # --- Bypass A: все write-категории списывают бюджет одного grant ---
+    def test_production_all_write_categories_consume_budget(self):
+        from atlas_core.autonomy import create_grant, get_grant
+        from atlas_core.github_adapter import GitContract, GitHubAdapter
+        prod = GitHubAdapter(forge=self.forge, contract=GitContract())
+        g = create_grant(project_id="p", mode="STANDARD",
+                         capabilities=["commit", "push_feature", "create_pr", "merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         budget={"max_invocations": 4}, reason="budget")
+        subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
+        Path(self.wc, "f.py").write_text("x=1")
+        sha = prod.commit(self.wc, "VP-7: изменение", grant_id=g["id"])          # 1
+        prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])              # 2
+        self.forge.set_checks(sha, "GREEN")
+        pr = prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha=sha,
+                            title="VP-7 демо", body="тело", grant_id=g["id"])     # 3
+        prod.squash_merge(pr["number"], expected_head=sha, message="VP-7: squash после PASS",
+                          grant_id=g["id"])                                        # 4
+        self.assertEqual(get_grant(g["id"])["budget"]["used_invocations"], 4)
+
+    def _feature_prod(self, prod):
+        subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
+        Path(self.wc, "f.py").write_text("x=1")
+        subprocess.run(["git", "-C", self.wc, "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", self.wc, "commit", "-qm", "VP-7: seed"], capture_output=True)
+
 
 # ---------------------------------------------------------------------------
 class TestMergeGate(VP7Base):
@@ -332,6 +414,72 @@ class TestMergeGate(VP7Base):
                          reason="scopeless")  # НЕТ allowed_repos/bases
         req = self._setup(grant_id=g["id"])
         self.assertFalse(evaluate_merge(req).permitted)
+
+    # --- Bypass C: авторитетный merge грузит RP/QR из хранилища (не caller-dict) ---
+    def _persist_rp_qr(self, *, head_sha: str, verdict: str = "PASS"):
+        """Создать РЕАЛЬНЫЕ persisted ReviewPackage + QualityReport и вернуть их id."""
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        pkg = build_review_package(ReviewInputs(
+            project_id="p", run_id="run_x", wo_key="VP-7", vp_key="VP-7",
+            branch="atlas/vp-7", base_sha="B", head_sha=head_sha, impact_class="LOCAL",
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, verdict, "", [], run_id="run_x")
+        return pkg, rep
+
+    def _auth_grant(self):
+        from atlas_core.autonomy import create_grant
+        return create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                            environment="synthetic", allowed_repos=["a/b"], allowed_bases=["main"],
+                            reason="auth")["id"]
+
+    def _auth_call(self, *, review_package_id, head_sha="HEAD1", quality_report_id="", grant_id=None):
+        from atlas_core.merge_gate import evaluate_merge_authoritative
+        return evaluate_merge_authoritative(
+            repo="a/b", base="main", branch="atlas/vp-7", head_sha=head_sha, project_id="p",
+            grant_id=grant_id or self._auth_grant(), review_package_id=review_package_id,
+            quality_report_id=quality_report_id, environment="synthetic",
+            checks={"head_sha": head_sha, "state": "GREEN"},
+            mergeability={"mergeable": True, "state": "CLEAN"}, pr_number=1)
+
+    def test_authoritative_merge_from_storage_permits(self):
+        pkg, rep = self._persist_rp_qr(head_sha="HEAD1", verdict="PASS")
+        d = self._auth_call(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertTrue(d.permitted)
+
+    def test_authoritative_merge_stale_rp_in_storage_denies(self):
+        # RP в хранилище привязан к OLD head; авторитетная сверка с текущим head
+        # инвалидирует пакет фактом → deny (caller лишь передал id, не содержимое).
+        pkg, rep = self._persist_rp_qr(head_sha="OLD", verdict="PASS")
+        d = self._auth_call(review_package_id=pkg["id"], head_sha="HEAD1",
+                            quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+
+    def test_authoritative_merge_missing_rp_denies(self):
+        d = self._auth_call(review_package_id="rpkg_nonexistent")
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+
+    def test_authoritative_merge_empty_rp_id_denies(self):
+        d = self._auth_call(review_package_id="")
+        self.assertEqual(d.reason_code, "STALE_REVIEW_HEAD")
+
+    def test_authoritative_merge_no_report_denies(self):
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        pkg = build_review_package(ReviewInputs(
+            project_id="p", head_sha="HEAD1", impact_class="LOCAL"), actor="reviewer")
+        d = self._auth_call(review_package_id=pkg["id"])  # QR не создавали
+        self.assertEqual(d.reason_code, "REVIEWER_NOT_PASS")
+
+    def test_authoritative_merge_qr_id_mismatch_denies(self):
+        pkg, _rep = self._persist_rp_qr(head_sha="HEAD1", verdict="PASS")
+        d = self._auth_call(review_package_id=pkg["id"], quality_report_id="qrep_wrong")
+        self.assertEqual(d.reason_code, "STALE_REVIEW_HEAD")
+
+    def test_authoritative_merge_revise_report_denies(self):
+        pkg, rep = self._persist_rp_qr(head_sha="HEAD1", verdict="REVISE")
+        d = self._auth_call(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertEqual(d.reason_code, "REVIEWER_NOT_PASS")
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +655,74 @@ class TestTimeMachine(VP7Base):
         with self.assertRaises(TimeMachineError) as cm:
             replay(cp["id"], grant_id=g["id"], repo="owner/B")
         self.assertIn(cm.exception.code, ("REPO_NOT_ALLOWED", "REPO_MISMATCH"))
+
+    def _github_project(self, pid="pjgh", repo="owner/A"):
+        from datetime import datetime, timezone
+
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Project
+        now = datetime.now(timezone.utc)
+        with session_scope() as s:
+            s.add(Project(id=pid, name="gh", source_kind="github",
+                          source_location=f"https://github.com/{repo}", source_ref=repo,
+                          status="connected", created_at=now, updated_at=now))
+            s.commit()
+
+    # #2 из 9: другой repo с ОПУЩЕННЫМ caller repo → всё равно deny (repo выводится).
+    def test_replay_another_repo_caller_omitted_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        self._github_project("pjgh", "owner/A")
+        cp = self._ckpt(project_id="pjgh")
+        g = create_grant(project_id="pjgh", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["owner/B"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"])  # caller repo опущен
+        self.assertEqual(cm.exception.code, "REPO_NOT_ALLOWED")
+
+    # #3-вариант: caller repo при невыводимом доверенном repo → REPO_NOT_DERIVABLE.
+    def test_replay_caller_repo_not_derivable_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt(project_id="p")  # проект без github-source → repo не выводим
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["x/y"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"], repo="x/y")
+        self.assertEqual(cm.exception.code, "REPO_NOT_DERIVABLE")
+
+    # #5: base от каллера отвергается (не выводима из checkpoint) — не «тихо пропущена».
+    def test_replay_caller_base_rejected(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt(project_id="p")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"], base="release")
+        self.assertEqual(cm.exception.code, "BASE_NOT_DERIVABLE")
+
+    # #7: environment от каллера отвергается (replay не деплоит).
+    def test_replay_caller_environment_rejected(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        cp = self._ckpt(project_id="p")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"], environment="prod")
+        self.assertEqual(cm.exception.code, "ENVIRONMENT_NOT_DERIVABLE")
+
+    # #4/#6: опущенные base/environment — штатный replay (не bypass, deny не срабатывает).
+    def test_replay_omitted_base_and_environment_ok(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import replay
+        cp = self._ckpt(project_id="p")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        res = replay(cp["id"], grant_id=g["id"])  # base/environment опущены
+        self.assertTrue(res["new_run_id"])
+        self.assertFalse(res["source_rewritten"])
 
     def test_compare_reports_differences(self):
         from atlas_core.timemachine import compare
