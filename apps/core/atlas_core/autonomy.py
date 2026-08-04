@@ -94,11 +94,13 @@ R_CAP_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
 R_BUDGET = "BUDGET_EXHAUSTED"
 R_CONFLICT = "VERSION_CONFLICT"
 R_INACTIVE = "GRANT_INACTIVE"
+R_NOT_YET = "GRANT_NOT_YET_ACTIVE"  # call-8 fix: starts_at в будущем
 
 _NEXT_ACTION: dict[str, str] = {
     R_PERMITTED: "Действие разрешено внутри точного scope grant.",
     R_NO_GRANT: "Создайте grant с нужным режимом и capability для этого проекта.",
     R_EXPIRED: "Grant истёк — выпустите новый grant с актуальным сроком.",
+    R_NOT_YET: "Grant ещё не начал действовать (starts_at в будущем) — дождитесь начала периода.",
     R_REVOKED: "Grant отозван — выпустите новый grant, если действие ещё нужно.",
     R_PROJECT_MISMATCH: "Grant привязан к другому проекту — используйте grant этого проекта.",
     R_PROJECT_UNBOUND: "Grant без project_id недопустим для операции проекта — выпустите привязанный grant.",
@@ -269,6 +271,20 @@ def _is_expired(d: dict, now: datetime | None = None) -> bool:
     return _aware(exp_dt) < now
 
 
+def _not_yet_active(d: dict, now: datetime | None = None) -> bool:
+    """call-8 fix: grant с ``starts_at`` в будущем ещё НЕ действует. Временной scope
+    grant — [starts_at, expires_at]; fail-closed: непарсируемый starts_at → deny."""
+    st = d.get("starts_at")
+    if not st:
+        return False
+    now = now or _utcnow()
+    try:
+        st_dt = datetime.fromisoformat(str(st).replace("Z", "+00:00"))
+    except ValueError:
+        return True  # непарсируемый старт → не доказано, что активен → deny
+    return _aware(st_dt) > now
+
+
 def revoke_grant(grant_id: str, *, by: str = "owner", reason: str = "",
                  expected_version: int | None = None,
                  correlation_id: str = "") -> dict:
@@ -364,6 +380,10 @@ def evaluate(capability: str, *, grant_id: str | None = None, project_id: str | 
     if _is_expired(g, now):
         _mark_expired(gid)
         return Decision(False, R_EXPIRED, next_action(R_EXPIRED), grant_id=gid)
+    # call-8 fix: временной scope grant — [starts_at, expires_at]. ACTIVE grant с
+    # будущим starts_at ещё не действует → fail-closed deny (NOT_YET_ACTIVE).
+    if _not_yet_active(g, now):
+        return Decision(False, R_NOT_YET, next_action(R_NOT_YET), grant_id=gid)
 
     # 4. Optimistic version.
     if expected_version is not None and g["version"] != expected_version:

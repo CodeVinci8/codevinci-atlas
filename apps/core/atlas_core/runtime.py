@@ -80,6 +80,15 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
         from .adapters.real_claude import RealClaudeAdapter
         adapter = RealClaudeAdapter()
 
+    # call-8 fix (Emergency Stop, §19): активный Stop запрещает НОВЫЕ jobs, включая
+    # диспетч ранее созданного QUEUED Run. Проверяем на production start boundary
+    # (не только в create_run/replay).
+    from . import emergency
+    if emergency.blocks_new_jobs():
+        audit.record("runs.dispatch.emergency_blocked", f"run={run_id}", actor=actor)
+        return {"ok": False, "reason": "EMERGENCY_STOP",
+                "detail": "Emergency Stop активен: диспетч Builder запрещён"}
+
     if run_svc.get_run(run_id)["state"] != "QUEUED":
         return {"ok": False, "reason": "RUN_NOT_QUEUED", "state": run_svc.get_run(run_id)["state"]}
 
@@ -155,7 +164,19 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
                                blocker=f"builder:{code.value if code else 'ERROR'}")
             return {"ok": False, "reason": code.value if code else "ERROR", "effective": profile}
 
-        # 4. Успех: session (safe) + COLLECTING; освобождение аренды.
+        # 4. call-8 fix: если Emergency Stop активирован во время шага — кооперативно
+        #    прервать (INTERRUPTED), не продвигая Run в COLLECTING; аренду освободить
+        #    (один writer сохраняется; результат шага не фиксируется как прогресс).
+        if emergency.is_active():
+            lease_svc.release(lease.id)
+            run_svc.transition(run_id, "INTERRUPTED", expected_version=_ver(run_svc, run_id),
+                               reason="Emergency Stop во время builder-шага",
+                               blocker="EMERGENCY_STOP")
+            audit.record("runs.dispatch.emergency_interrupt", f"run={run_id} profile={profile}",
+                         actor=actor)
+            return {"ok": False, "reason": "EMERGENCY_STOP", "effective": profile}
+
+        # Успех: session (safe) + COLLECTING; освобождение аренды.
         sid = res.result.session_id or ""
         run_svc.record_provider_session(run_id, provider="claude", session_id=sid,
                                         role=_BUILDER_ROLE, profile_id=pid)

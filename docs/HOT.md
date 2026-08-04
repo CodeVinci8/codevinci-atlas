@@ -44,11 +44,13 @@
   Apache-2.0 LICENSE, read-only auth-health, официальная numeric-ёмкость Claude
   (status-line rate_limits) + Codex (app-server), single-Claude пул (registry-
   driven), production Run-start роутинг. Новая миграция — `0007`.
-- **Reviewer история (immutable):** call **7/7** проверил head `4517ebd` и вернул
-  genuine **REVISE** с двумя находками в `merge_gate.py` (base != live pr.base;
-  безусловные baseline/scope/owner-gate). Обе исправлены в **`6aa2d20`**
-  (`_derive_gate_facts`, live-base enforcement) с тестами. Следующий вызов —
-  **call 8/8** по исправленному head (call-7 не переименовывается в PASS).
+- **Reviewer история (immutable):** call **7/7** (head `4517ebd`) → genuine
+  **REVISE** (2 находки merge_gate.py) → исправлено `6aa2d20`. call **8/8** (head
+  `fad8449`) → genuine **REVISE** (Emergency Stop не закрывал production start
+  boundary; grant не проверял starts_at) → исправлено (emergency-check в
+  start_builder_run + кооперативный interrupt; `_not_yet_active`/GRANT_NOT_YET_ACTIVE)
+  с тестами. **VP-7 не закрыт** (genuine REVISE, call-8 израсходован). Следующий —
+  **call 9/9** по исправленному head; call-7/8 не переименовываются в PASS.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

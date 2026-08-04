@@ -54,12 +54,13 @@ single-Claude пул (registry-driven, claude-pro-02 disabled), production Run-s
 
 ## NEXT_ACTION
 
-Финальный независимый Reviewer **call 8/8** по исправленному head (после того как
-все правки закоммичены, запушены и CI зелёный на точном PR head). call 7/7 уже
-израсходован (genuine REVISE на `4517ebd`, находки исправлены в `6aa2d20`). При
-genuine PASS — авторитетный STANDARD-merge PR #13, backup, миграция `0006→0007`,
-рестарт стека, live-smoke, truth-sync. При REVISE — не мержить, зафиксировать
-блокеры.
+Новый owner-авторизованный независимый Reviewer **call 9/9** по исправленному head
+(после того как все правки закоммичены, запушены и CI зелёный на точном PR head).
+call 7/7 (REVISE@`4517ebd` → fix `6aa2d20`) и call 8/8 (REVISE@`fad8449` →
+emergency/starts_at fix) израсходованы; оба genuine REVISE, находки исправлены с
+тестами. При genuine PASS — авторитетный STANDARD-merge PR #13, backup, миграция
+`0006→0007`, рестарт стека, live-smoke, truth-sync. При REVISE — не мержить,
+зафиксировать блокеры. Каждый новый Reviewer-вызов требует явной owner-авторизации.
 
 ## VP-8 (записано, НЕ реализовано)
 

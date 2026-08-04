@@ -194,8 +194,32 @@ call-8 пишет в `call-8/` и не перезаписывает call-7. call
     строк скопированного кода (см. REUSE_REGISTER).
 
 Согласно owner-правилу genuine REVISE — легитимный блокер call-7; находки
-исправлены. VP-7 закрывается только при genuine PASS call-8 на исправленном head,
+исправлены. VP-7 закрывается только при genuine PASS на исправленном head,
 затем merge/backup/миграция/deploy/truth-sync.
+
+### call 8/8 — genuine REVISE (head `fad8449`)
+
+Независимый Reviewer (codex-plus-01, read-only, 21 файл) на полном diff `fad8449`
+вернул genuine **REVISE** (accounting **8/8**), merge НЕ исполнялся:
+
+1. **Критично** — Emergency Stop не закрывал production start boundary:
+   `runtime.start_builder_run`/`POST /runs/{id}/start` не проверяли
+   `emergency.blocks_new_jobs()` (ранее-QUEUED Run стартовал при активном Stop), и
+   Stop во время шага не прерывал результат. **Fix:** проверка `blocks_new_jobs()`
+   на входе диспетча (EMERGENCY_STOP deny) + кооперативное прерывание после шага
+   (`is_active()` → INTERRUPTED, аренда снята). Тесты
+   `test_emergency_blocks_dispatch_of_queued_run`, `test_emergency_during_step_interrupts`.
+2. **Высокий** — `autonomy.evaluate()` не проверял `starts_at`: ACTIVE grant с
+   будущим стартом разрешался до начала действия. **Fix:** `_not_yet_active` +
+   reason-код `GRANT_NOT_YET_ACTIVE` (fail-closed: непарсируемый starts_at → deny).
+   Тесты `test_future_starts_at_denies_not_yet_active`, `test_past_starts_at_still_permits`.
+
+Обе находки исправлены с тестами; **merge не исполнялся, PASS не фабриковался**.
+call-8 — единственный авторизованный вызов этой сессии → VP-7 **не закрыт**
+(genuine REVISE). Правки не проверены (call-8 израсходован). Полная регрессия
+**402 OK**; acceptance 34/34; живая БД остаётся `0006`. NEXT: новый owner-
+авторизованный Reviewer-вызов (**call 9/9**) по исправленному head; при genuine
+PASS — merge/backup/миграция/deploy/truth-sync. Evidence: `final_review/call-8/`.
 
 ## Границы (не VP-8/VP-9)
 

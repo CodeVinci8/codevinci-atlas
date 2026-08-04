@@ -166,3 +166,43 @@ class TestRuntimeDispatch(RuntimeBase):
         r2 = start_builder_run(rid, adapter=OkAdapter(), actor="test")
         self.assertFalse(r2["ok"])
         self.assertEqual(r2["reason"], "RUN_NOT_QUEUED")    # рестарт не дублирует
+
+    # --- call-8 fix: Emergency Stop на production start boundary ---
+    def test_emergency_blocks_dispatch_of_queued_run(self):
+        from atlas_core import emergency
+        from atlas_core.runtime import start_builder_run
+        self._claude("claude-pro-01")
+        rid = self._run()  # QUEUED
+        emergency.engage(reason="test stop", actor="owner")  # активируем ПОСЛЕ create
+        ad = OkAdapter()
+        r = start_builder_run(rid, adapter=ad, actor="test")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["reason"], "EMERGENCY_STOP")     # ранее-QUEUED не запускается
+        self.assertEqual(ad.calls, [])                      # adapter не вызван
+        self.assertEqual(self.runs.get_run(rid)["state"], "QUEUED")  # не продвинулся
+
+    def test_emergency_during_step_interrupts(self):
+        from atlas_core import emergency
+        from atlas_core.runtime import start_builder_run
+        self._claude("claude-pro-01")
+        rid = self._run()
+
+        class EngageMidStep:
+            calls: list = []
+
+            def start(self, job, *, profile_alias, root_path, **kw):
+                self.calls.append(profile_alias)
+                emergency.engage(reason="mid-step", actor="owner")  # Stop во время шага
+                return _AdapterResult(f"sess-{profile_alias}")
+
+        ad = EngageMidStep()
+        r = start_builder_run(rid, adapter=ad, actor="test")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["reason"], "EMERGENCY_STOP")
+        # кооперативно прервано: INTERRUPTED, не COLLECTING; аренда освобождена.
+        self.assertEqual(self.runs.get_run(rid)["state"], "INTERRUPTED")
+        from atlas_core.db import session_scope
+        from atlas_core.orm import RunLease
+        with session_scope() as s:
+            leases = s.query(RunLease).filter(RunLease.run_id == rid).all()
+            self.assertTrue(all(x.released_at != "" for x in leases))  # один writer снят

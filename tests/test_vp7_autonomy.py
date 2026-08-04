@@ -98,6 +98,28 @@ class TestAutonomyGrants(VP7Base):
         self.assertTrue(d.permitted)
         self.assertEqual(d.reason_code, "PERMITTED")
 
+    # --- call-8 fix: ACTIVE grant с будущим starts_at ещё не действует ---
+    def test_future_starts_at_denies_not_yet_active(self):
+        from datetime import datetime, timedelta, timezone
+
+        from atlas_core.autonomy import evaluate
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Grant
+        g = self._grant()
+        future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        with session_scope() as s:
+            row = s.get(Grant, g["id"])
+            row.starts_at = datetime.fromisoformat(future)  # ACTIVE, но начнётся позже
+            s.commit()
+        d = evaluate("commit", grant_id=g["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "GRANT_NOT_YET_ACTIVE")  # временной scope соблюдён
+
+    def test_past_starts_at_still_permits(self):
+        from atlas_core.autonomy import evaluate
+        g = self._grant()  # starts_at = now (в прошлом к моменту evaluate)
+        self.assertTrue(evaluate("commit", grant_id=g["id"]).permitted)
+
     # --- Fix2: пустой scope НЕ означает «любой repo» (fail-closed) ---
     def test_empty_scope_repo_capability_denies(self):
         from atlas_core.autonomy import evaluate
