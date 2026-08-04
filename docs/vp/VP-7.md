@@ -107,6 +107,44 @@ VP-7-ветке и PR** Atlas. Это разделение evidence фиксир
    не копировать TonWave/Sub2API/3x-ui. Решение и аудит — в
    [`DECISIONS`](../DECISIONS.md).
 
+## Числовые лимиты подписок и Claude-пул (реализация closure)
+
+5. **Реальная ёмкость из официальных CLI (§11.6).**
+   - **Codex** — `codex app-server` (JSON-RPC): ждём ответ `initialize`, шлём
+     notification `initialized`, читаем `account/read`+`account/rateLimits/read`,
+     различаем `result`/`error`, надёжно reap-им процесс. Показываем только реально
+     возвращённые окна (`primary`/`secondary`); null-secondary не выдумываем.
+     Реальные значения: `codex-plus-01` — неделя 68%; `codex-plus-02` — неделя 96% (LOW).
+   - **Claude** — план из `auth status --json`; окна — из официальных
+     `rate_limit_event` потока `-p … --output-format stream-json --verbose`
+     (`rateLimitType`+`status`+`resetsAt`): `allowed`→Доступно, `rejected`→Исчерпано.
+     Owner-действие «Начать окно и обновить» = один минимальный официальный ответ
+     (немного подписки, tools/MCP/repo off). «Обновить лимиты» не тратит подписку.
+   - **Доказанное ограничение:** числовой `used_percentage` установленный Claude
+     Code 2.1.220 отдаёт **только** через интерактивный status-line `rate_limits`,
+     закрытый первичным onboarding (`hasCompletedOnboarding` в персистентном
+     `.claude.json` нельзя задать session-local `--settings`; нажимать клавиши
+     onboarding / мутировать config запрещено). Поэтому показываем статус окна +
+     reset без фикции процентов. `/usage`-TUI путь удалён (onboarding-блок).
+   - **Stale-fallback:** неудачный refresh не затирает валидные числа — переносит
+     последние как `STALE` с новым error_code и честным возрастом данных.
+   - **Bounded refresh:** per-alias cooldown + single-flight; HTTP не bypass-ит
+     интервал (`force=False`); только доверенный CLI/deploy путь может обойти.
+6. **Минимальный Claude Builder-пул (вертикальный срез, не VP-8).**
+   `claude-pro-01`/`claude-pro-02` — один логический пул с раздельными
+   идентичностями/credentials. Sticky-назначение на Builder-сессию, эксклюзивная
+   аренда (один writer), safe rate-limit handoff (пометить окно исчерпанным,
+   сохранить Run/handoff/checkpoint, ретрай ≤1 на другом профиле), независимость
+   Reviewer, консервативный fallback при неизвестной ёмкости. Без фиктивного
+   объединённого процента.
+7. **Инцидент (раскрытие).** В ходе closure тест миграции случайно затронул живую
+   БД: `migrations/env.py` форсит `sqlalchemy.url = settings.db_url` и игнорирует
+   override, а compose bind-монтирует `/var/lib/codevinci-atlas`. Немедленно
+   выполнен downgrade обратно на `0006_review_quality`; проверено: SQLite
+   integrity `ok`, VP-7-колонок нет, bounded row-counts сохранены, Core здоров.
+   Изолированные тесты миграций теперь обязаны задавать временный `ATLAS_DATA_DIR`
+   и печатать доказательство иного пути БД.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

@@ -751,6 +751,11 @@ class CapacityObservation(Base):
     seven_d_reset_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
     error_code: Mapped[str] = mapped_column(String(60), default="")
     windows_json: Mapped[str] = mapped_column(Text, default="[]")  # [{id,label,used_pct,remaining_pct,reset_at,window_mins}]
+    # VP-7 stale-fallback: время, когда наблюдались сами числовые данные (окна).
+    # Отличается от observed_at (момент записи строки = момент проверки/сбоя):
+    # при STALE-переносе observed_at обновляется на время неудачной проверки, а
+    # data_observed_at сохраняет исходный момент валидных данных → честный «возраст».
+    data_observed_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
 
     def to_dict(self) -> dict:
         import json as _json
@@ -766,6 +771,7 @@ class CapacityObservation(Base):
             "seven_d_reset_at": _iso_opt(self.seven_d_reset_at),
             "error_code": self.error_code,
             "windows": _json.loads(self.windows_json or "[]"),
+            "data_observed_at": _iso_opt(self.data_observed_at),
         }
 
 

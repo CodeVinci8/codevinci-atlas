@@ -209,6 +209,17 @@ def cmd_profiles(args) -> int:
                  "cli_version": o["cli_version"]} for o in rep]
         print(json.dumps(safe, ensure_ascii=False, indent=2))
         return 0
+    if args.action == "capacity":
+        # VP-7: доверенный deploy/admin-путь bounded-сверки числовых лимитов
+        # (Codex app-server / Claude usage). Это единственный путь, которому
+        # позволено обходить cooldown (force=True); HTTP-refresh — не bypass-ит.
+        # Только safe-поля (plan/окна/error_code); токены/cookie/email не хранятся.
+        from .capacity import reconcile_capacity
+        res = reconcile_capacity(force=True)
+        safe = [{k: r.get(k) for k in ("alias", "state", "plan", "auth_ok", "source",
+                                       "status", "error_code")} for r in res]
+        print(json.dumps(safe, ensure_ascii=False, indent=2))
+        return 0
     return 2
 
 
@@ -226,8 +237,8 @@ def main(argv: list[str] | None = None) -> int:
         if name == "backup":
             p.add_argument("--out", help="каталог для архива")
         p.set_defaults(func=fn)
-    pp = sub.add_parser("profiles", help="сверка/список/auth-health профилей (safe-метаданные)")
-    pp.add_argument("action", choices=["reconcile", "list", "auth-health"],
+    pp = sub.add_parser("profiles", help="сверка/список/auth-health/capacity профилей (safe-метаданные)")
+    pp.add_argument("action", choices=["reconcile", "list", "auth-health", "capacity"],
                     help="reconcile: реестр→БД; list: safe-список; auth-health: read-only проверка входа")
     pp.add_argument("--json", action="store_true")
     pp.add_argument("--actor", default="deploy", help="актор для Audit")

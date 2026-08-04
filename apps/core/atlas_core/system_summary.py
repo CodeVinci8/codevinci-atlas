@@ -57,38 +57,37 @@ def _read_cpu_times() -> tuple[int, int] | None:
 
 def _cpu_utilization() -> dict:
     """Реальная CPU-утилизация 0–100% из **дельты двух выборок** ``/proc/stat``
-    (не преобразование load average). Окно = время между последовательными
-    вызовами; при первом вызове берётся короткая bootstrap-выборка. Если
-    измерить нельзя → ``utilization_pct=None`` (UI покажет «Данные недоступны»)."""
+    (не преобразование load average).
+
+    Честное первое измерение: при первом вызове (нет предыдущей выборки) реальную
+    дельту посчитать НЕЛЬЗЯ → ``state=measuring`` (UI покажет «Измерение…», не
+    0%). Следующий опрос (Pulse каждые 5 с) даёт настоящее окно и процент. Если
+    ``/proc/stat`` недоступен → ``state=unavailable`` (UI покажет «Недоступно»).
+    Никакого блокирующего bootstrap-sleep внутри запроса."""
     global _cpu_prev
     cur = _read_cpu_times()
     if cur is None:
-        return {"utilization_pct": None, "sample_window_s": None, "source": "unavailable"}
+        return {"utilization_pct": None, "sample_window_s": None,
+                "source": "unavailable", "state": "unavailable"}
     now = time.monotonic()
     if _cpu_prev is None:
-        # Bootstrap: короткая вторая выборка для немедленного реального измерения.
-        time.sleep(0.12)
-        cur2 = _read_cpu_times()
-        now2 = time.monotonic()
-        if cur2 is None:
-            _cpu_prev = (cur[0], cur[1], now)
-            return {"utilization_pct": None, "sample_window_s": None, "source": "/proc/stat"}
-        prev, cur, window = cur, cur2, now2 - now
-        _cpu_prev = (cur[0], cur[1], now2)
-    else:
-        prev = (_cpu_prev[0], _cpu_prev[1])
-        window = now - _cpu_prev[2]
+        # Первый сэмпл: сохраняем базовую точку, но дельты ещё нет — «Измерение…».
         _cpu_prev = (cur[0], cur[1], now)
+        return {"utilization_pct": None, "sample_window_s": None,
+                "source": "/proc/stat", "state": "measuring"}
+    prev = (_cpu_prev[0], _cpu_prev[1])
+    window = now - _cpu_prev[2]
+    _cpu_prev = (cur[0], cur[1], now)
     dtotal = cur[0] - prev[0]
     didle = cur[1] - prev[1]
-    # Слишком узкое окно → измерение недостоверно (честно None, без шума).
+    # Слишком узкое окно (частый повторный вызов) → измерение недостоверно.
     if dtotal <= 0 or window < 0.05:
         return {"utilization_pct": None, "sample_window_s": round(window, 3),
-                "source": "/proc/stat delta"}
+                "source": "/proc/stat delta", "state": "measuring"}
     pct = (1.0 - didle / dtotal) * 100.0
     pct = max(0.0, min(100.0, pct))
     return {"utilization_pct": round(pct, 1), "sample_window_s": round(window, 3),
-            "source": "/proc/stat delta"}
+            "source": "/proc/stat delta", "state": "ok"}
 
 
 def _cpu() -> dict:
@@ -101,7 +100,8 @@ def _cpu() -> dict:
     # load_avg — планировщик, НЕ CPU%; utilization_pct — реальная утилизация.
     return {"logical_cores": os.cpu_count(), "load_avg": load,
             "utilization_pct": util["utilization_pct"],
-            "sample_window_s": util["sample_window_s"], "util_source": util["source"]}
+            "sample_window_s": util["sample_window_s"], "util_source": util["source"],
+            "util_state": util["state"]}
 
 
 def _memory() -> dict:
@@ -266,11 +266,19 @@ def _runner(settings) -> dict:
         return {"status": "UNKNOWN", "uptime_s": None}
 
 
+_ACTIONABLE_NA = frozenset({"OPEN_OWNER_RUN", "INSPECT_RUN", "CREATE_RUN",
+                            "CONNECT_PROJECT", "OPEN_MAP"})
+
+
 def _next_action(runs: dict) -> dict:
     """Контекстное **точное продуктовое** следующее действие (§27.2), отдельно от
-    операционных рисков. Приоритет: owner-required Run → активный Run → принятый
-    Work Order без Run → проект без принятого VP → нет проектов → всё завершено
-    (канонический следующий VP/review). Честный PARTIAL при отсутствии таблиц."""
+    операционных предупреждений. Приоритет: owner-required Run → активный Run →
+    принятый Work Order без Run → проект без принятого VP → нет проектов → всё
+    завершено. Честный PARTIAL при отсутствии таблиц.
+
+    ``actionable`` = есть ли реальное действие Run/VP, которое владелец может
+    выполнить сейчас. «Всё завершено» (NEXT_VP) и PARTIAL — **не** actionable:
+    UI не показывает их как фиктивное действие дашборда (напр. «VP-8 next»)."""
     from sqlalchemy import text as _text
 
     def _count(table: str, where=None) -> int | None:
@@ -325,6 +333,8 @@ def system_summary(settings) -> dict:
     """Собрать sanitized-сводку. Partial-состояния честны (None)."""
     data_dir = settings.data_dir
     runs = _run_counts()
+    next_action = _next_action(runs)
+    next_action["actionable"] = next_action.get("code") in _ACTIONABLE_NA
     return {
         "collected_at": utcnow_iso(),
         "atlas_version": settings.version,
@@ -344,7 +354,7 @@ def system_summary(settings) -> dict:
         "backup_age_s": _backup_age_s(data_dir),
         "runs": runs,
         "leases": _lease_counts(),
-        "next_action": _next_action(runs),
+        "next_action": next_action,
     }
 
 

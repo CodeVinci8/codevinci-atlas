@@ -67,14 +67,14 @@ def unknown_capacity() -> Capacity:
 
 # =============================================================================
 # VP-7: реальные числовые лимиты подписок из ОФИЦИАЛЬНЫХ CLI-источников (§11.6).
-# Codex — App Server (JSON-RPC); Claude — auth status (план) + PTY /usage (окна).
+# Codex — App Server (JSON-RPC); Claude — auth status (план) + stream-json
+# rate_limit_event (статус окна + reset). used_percentage Claude отдаёт лишь
+# через onboarding-закрытый status-line — числа не выдумываем.
 # Никогда не читаем/не копируем токены/cookie/сессии; email/org — redaction на
 # границе. Нет числа → точный error_code, а не немой UNKNOWN.
 # =============================================================================
 import json as _json  # noqa: E402
-import os as _os  # noqa: E402
 import re as _re  # noqa: E402
-import select as _select  # noqa: E402
 import subprocess as _sp  # noqa: E402
 import threading as _th  # noqa: E402
 import time as _time  # noqa: E402
@@ -132,32 +132,71 @@ def _cap_error(provider: str, code: str, detail: str, *, plan: str = "",
             "error_code": code, "detail": _safe(detail)}
 
 
+def _reap(p) -> None:
+    """Надёжно завершить и «пожать» дочерний процесс (никаких зомби/висящих pipe)."""
+    for fn in (lambda: p.stdin and p.stdin.close(), p.terminate):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        p.wait(timeout=2)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+            p.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+    for stream in (p.stdout, p.stderr):
+        try:
+            if stream:
+                stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def probe_codex_capacity(root_path: str, *, executable: str, run_as_user: str | None = None,
                          timeout: float = 25.0) -> dict:
-    """Реальные лимиты Codex через официальный ``codex app-server`` (JSON-RPC:
-    initialize → account/read[planType] → account/rateLimits/read). Только safe-поля."""
+    """Реальные лимиты Codex через официальный ``codex app-server`` (JSON-RPC 2.0):
+    initialize → (initialized) → account/read[planType] → account/rateLimits/read.
+
+    Хардненинг: ждём именно **ответ на initialize** (без фиксированных sleep),
+    отправляем notification ``initialized``, читаем и ``result``, и ``error``,
+    различаем сбои инициализации/аккаунта/лимитов, надёжно reap-им процесс.
+    Персистим только plan и rate-limit поля; email/org/токены не сохраняем; окна
+    показываем только реально возвращённые (никакого выдуманного 5-часового окна)."""
     cmd = _base_argv(root_path, run_as_user, {"CODEX_HOME": root_path}) + [executable, "app-server"]
     try:
         p = _sp.Popen(cmd, stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, bufsize=1)
     except Exception as exc:  # noqa: BLE001
         return _cap_error("codex", "CODEX_APPSERVER_SPAWN_FAILED", str(exc))
-    responses: dict[int, dict] = {}
-    done = _th.Event()
+    results: dict[int, dict] = {}
+    errors: dict[int, dict] = {}
+    cv = _th.Condition()
 
     def reader():
-        for line in p.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = _json.loads(line)
-            except _json.JSONDecodeError:
-                continue
-            if isinstance(msg, dict) and "id" in msg and "result" in msg:
-                responses[msg["id"]] = msg["result"]
-                if 3 in responses:
-                    done.set()
-                    return
+        try:
+            for line in p.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if not (isinstance(msg, dict) and "id" in msg):
+                    continue  # notifications (без id) игнорируем — идентификаторы не храним
+                with cv:
+                    if "result" in msg:
+                        r = msg["result"]
+                        results[msg["id"]] = r if isinstance(r, dict) else {"_": r}
+                    elif "error" in msg:
+                        e = msg["error"]
+                        errors[msg["id"]] = e if isinstance(e, dict) else {"message": str(e)}
+                    cv.notify_all()
+        finally:
+            with cv:
+                cv.notify_all()
 
     _th.Thread(target=reader, daemon=True).start()
 
@@ -165,34 +204,48 @@ def probe_codex_capacity(root_path: str, *, executable: str, run_as_user: str | 
         p.stdin.write(_json.dumps(obj) + "\n")
         p.stdin.flush()
 
+    def wait_for(rid: int, deadline: float) -> bool:
+        with cv:
+            while rid not in results and rid not in errors:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    return False
+                cv.wait(timeout=remaining)
+            return True
+
     try:
+        deadline = _time.monotonic() + timeout
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
               "params": {"clientInfo": {"name": "atlas", "title": "Atlas", "version": "1.0"}}})
-        _time.sleep(0.4)
+        if not wait_for(1, deadline):
+            return _cap_error("codex", "CODEX_INIT_TIMEOUT", "initialize без ответа")
+        if 1 in errors:
+            return _cap_error("codex", "CODEX_INIT_FAILED", str(errors[1].get("message", "")))
+        # Notification initialized (без id → ответа не ждём); best-effort.
+        try:
+            send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        except Exception:  # noqa: BLE001
+            pass
         send({"jsonrpc": "2.0", "id": 2, "method": "account/read", "params": {}})
-        _time.sleep(0.2)
         send({"jsonrpc": "2.0", "id": 3, "method": "account/rateLimits/read", "params": {}})
-        done.wait(timeout=timeout)
+        wait_for(2, deadline)
+        wait_for(3, deadline)
     except Exception as exc:  # noqa: BLE001
         return _cap_error("codex", "CODEX_APPSERVER_IO_FAILED", str(exc))
     finally:
-        for fn in (lambda: p.stdin.close(), lambda: p.terminate()):
-            try:
-                fn()
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            p.wait(timeout=2)
-        except Exception:  # noqa: BLE001
-            try:
-                p.kill()
-            except Exception:  # noqa: BLE001
-                pass
+        _reap(p)
 
-    acct = responses.get(2) or {}
+    acct = results.get(2) or {}
+    if not acct and 2 in errors:
+        return _cap_error("codex", "CODEX_ACCOUNT_READ_FAILED", str(errors[2].get("message", "")))
     plan = str(((acct.get("account") or {}).get("planType") or "")).strip()
     auth_ok = bool(acct.get("account"))
-    rl = (responses.get(3) or {}).get("rateLimits")
+    if 3 in errors and 3 not in results:
+        if not auth_ok:
+            return _cap_error("codex", "CODEX_NOT_AUTHENTICATED", "нет account", plan=plan)
+        return _cap_error("codex", "CODEX_RATELIMITS_FAILED",
+                          str(errors[3].get("message", "")), plan=plan, auth_ok=True)
+    rl = (results.get(3) or {}).get("rateLimits")
     if not rl:
         if not auth_ok:
             return _cap_error("codex", "CODEX_NOT_AUTHENTICATED", "app-server без account")
@@ -201,7 +254,7 @@ def probe_codex_capacity(root_path: str, *, executable: str, run_as_user: str | 
     for key in ("primary", "secondary"):
         w = rl.get(key)
         if not isinstance(w, dict):
-            continue
+            continue  # только реально возвращённые окна; null secondary не выдумываем
         mins = w.get("windowDurationMins")
         wid, label = _window_label(mins)
         windows.append(_mk_window(win_id=wid, label=label, used_pct=w.get("usedPercent"),
@@ -214,9 +267,24 @@ def probe_codex_capacity(root_path: str, *, executable: str, run_as_user: str | 
 
 
 def probe_claude_capacity(root_path: str, *, executable: str, run_as_user: str | None = None,
-                          timeout: float = 30.0) -> dict:
-    """План Claude из ``auth status --json`` + окна из bounded PTY ``/usage``.
-    Проба read-only: только ``/usage``, без промпта/агента/мутации login."""
+                          timeout: float = 60.0, start_window: bool = False) -> dict:
+    """Ёмкость Claude из ОФИЦИАЛЬНЫХ поверхностей (§11.6):
+
+    * план и авторизация — ``claude auth status --json`` (без затрат подписки);
+    * окна (тип + статус + reset) — официальные ``rate_limit_event`` из
+      ``claude -p … --output-format stream-json --verbose`` (**start_window**).
+
+    Замечание о числах: ``used_percentage`` в установленном Claude Code 2.1.220
+    отдаётся только через status-line ``rate_limits``, доступный лишь в
+    интерактивном REPL, который в изолированной среде закрыт первичным onboarding
+    (``hasCompletedOnboarding`` в персистентном ``.claude.json`` нельзя задать
+    session-local ``--settings``, а нажимать клавиши onboarding запрещено). Поэтому
+    честно отдаём статус окна (allowed/warning/rejected) + точный ``resets_at`` из
+    stream-json ``rate_limit_event`` — без фикции процентов.
+
+    Безопасность (§30): не читаем credentials/cookies/session; из потока берём
+    только rateLimitType/status/resetsAt; session_id/uuid/request_id/текст ответа/
+    email/org отбрасываем на границе. tools/MCP/repo отключены (``--allowedTools ''``)."""
     plan, auth_ok = "", False
     try:
         argv = _base_argv(root_path, run_as_user, {"CLAUDE_CONFIG_DIR": root_path}) + \
@@ -229,145 +297,117 @@ def probe_claude_capacity(root_path: str, *, executable: str, run_as_user: str |
         return _cap_error("claude", "CLAUDE_AUTH_STATUS_FAILED", str(exc))
     if not auth_ok:
         return _cap_error("claude", "CLAUDE_NOT_AUTHENTICATED", "не авторизован", plan=plan)
-    windows, err, detail = _claude_usage_windows(root_path, executable, run_as_user, timeout)
+    if not start_window:
+        # «Обновить лимиты» без окна не тратит подписку: возвращаем план+auth.
+        # Числовой статус окна требует явного owner-действия «Начать окно».
+        r = _cap_error("claude", "CLAUDE_NEEDS_START_WINDOW",
+                       "числовой статус окна требует owner-действия «Начать окно»",
+                       plan=plan, auth_ok=True)
+        r["source"] = "claude-auth-status"
+        return r
+    windows, err, detail = _claude_start_window(root_path, executable, run_as_user, timeout)
     return {"provider": "claude", "plan": plan, "auth_ok": True, "windows": windows,
-            "source": "claude-usage-tui" if windows else "claude-auth-status",
+            "source": "claude-stream-json" if windows else "claude-auth-status",
             "checked_at": _now_iso(), "error_code": err, "detail": _safe(detail)}
 
 
-def _clean_tty(b: bytearray) -> str:
-    t = b.decode("utf-8", "replace")
-    t = _re.sub(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)", "", t)
-    t = _re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", t)
-    t = _re.sub(r"\x1b[=>]", "", t)
-    t = _re.sub(r"[\x00-\x08\x0b-\x1f]", " ", t)
-    return _EMAIL_RE.sub("<redacted>", t)
+# Отображение официального rateLimitType → окно Atlas.
+_CLAUDE_WIN = {"five_hour": ("5h", "Сессия (5 ч)", 300),
+               "seven_day": ("7d", "Неделя (7 дн)", 10080)}
 
 
-def _parse_claude_usage(text: str) -> list[dict]:
+def parse_claude_rate_limit_events(stream_text: str) -> list[dict]:
+    """Safe-извлечение официальных ``rate_limit_event`` из stream-json Claude.
+    Берём ТОЛЬКО rateLimitType/status/resetsAt; идентификаторы/текст отбрасываем."""
+    out: list[dict] = []
+    for line in (stream_text or "").splitlines():
+        line = line.strip()
+        if '"rate_limit_info"' not in line:
+            continue
+        try:
+            d = _json.loads(line)
+        except _json.JSONDecodeError:
+            continue
+        info = d.get("rate_limit_info") if isinstance(d, dict) else None
+        if not isinstance(info, dict):
+            continue
+        rt = info.get("rateLimitType")
+        if rt in _CLAUDE_WIN:
+            out.append({"rateLimitType": rt, "status": str(info.get("status") or "").lower(),
+                        "resetsAt": info.get("resetsAt")})
+    return out
+
+
+def _claude_windows_from_events(events: list[dict]) -> list[dict]:
+    """Официальные события → окна Atlas (последнее событие на тип окна).
+    ``status``: allowed(доступно)/warning(мало)/rejected(исчерпано); reset — точный."""
+    by: dict[str, dict] = {}
+    for e in events:
+        by[e["rateLimitType"]] = e
     windows: list[dict] = []
-    for win_id, label, keys, mins in (("5h", "Сессия (5 ч)", ("current session", "session"), 300),
-                                       ("7d", "Неделя (7 дн)", ("current week", "week"), 10080)):
-        used = None
-        reset_txt = None
-        for key in keys:
-            idx = text.lower().find(key)
-            if idx < 0:
-                continue
-            seg = text[idx:idx + 260]
-            m = _re.search(r"(\d{1,3})\s*%", seg)
-            if m:
-                used = min(100, int(m.group(1)))
-            rm = _re.search(r"[Rr]esets?\s+([^\n|]{3,40})", seg)
-            if rm:
-                reset_txt = rm.group(1).strip()
-            break
-        if used is not None:
-            w = _mk_window(win_id=win_id, label=label, used_pct=used, reset_at=None, window_mins=mins)
-            if reset_txt:
-                w["reset_text"] = _safe(reset_txt, 40)
-            windows.append(w)
+    for rt, e in by.items():
+        wid, label, mins = _CLAUDE_WIN[rt]
+        status = e.get("status") or ""
+        used = 100.0 if status == "rejected" else None  # только исчерпание даёт число
+        w = _mk_window(win_id=wid, label=label, used_pct=used,
+                       reset_at=_epoch_iso(e.get("resetsAt")), window_mins=mins)
+        w["status"] = status  # allowed|warning|rejected — статус без фикции процента
+        windows.append(w)
     return windows
 
 
-def _claude_usage_windows(root: str, exe: str, user: str | None, timeout: float):
-    import pty
-    env = {"HOME": root, "CLAUDE_CONFIG_DIR": root, "PATH": f"/usr/bin:/bin:{root}/.local/bin",
-           "TERM": "xterm-256color", "LANG": "C.UTF-8", "COLUMNS": "120", "LINES": "44"}
-    envargs = [f"{k}={v}" for k, v in env.items()]
-    base = ["runuser", "-u", user, "--", "env", "-i", *envargs] if user else ["env", "-i", *envargs]
-    cmd = [*base, "sh", "-c", f"cd {root} && exec {exe}"]
-    master, slave = pty.openpty()
+def _claude_start_window(root: str, exe: str, user: str | None, timeout: float):
+    """Owner-действие «Начать окно и обновить»: РОВНО один минимальный официальный
+    ответ Claude (tools/MCP/repo off) через ``-p … --output-format stream-json``;
+    из потока берём официальные ``rate_limit_event``. Тратит немного подписки.
+    Без чтения credentials, без /usage TUI, без мутаций config/onboarding."""
+    argv = _base_argv(root, user, {"CLAUDE_CONFIG_DIR": root}) + [
+        exe, "-p", "ok", "--output-format", "stream-json", "--verbose", "--allowedTools", ""]
     try:
-        p = _sp.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+        out = _sp.run(argv, capture_output=True, text=True, timeout=timeout, stdin=_sp.DEVNULL)
+    except _sp.TimeoutExpired:
+        return [], "CLAUDE_START_WINDOW_TIMEOUT", "минимальный ответ превысил лимит времени"
     except Exception as exc:  # noqa: BLE001
-        _os.close(master)
-        _os.close(slave)
-        return [], "CLAUDE_USAGE_SPAWN_FAILED", str(exc)
-    _os.close(slave)
-    buf = bytearray()
+        return [], "CLAUDE_START_WINDOW_FAILED", str(exc)
+    events = parse_claude_rate_limit_events(out.stdout)
+    windows = _claude_windows_from_events(events)
+    if windows:
+        return windows, "", ""
+    return [], "CLAUDE_NO_RATE_LIMIT_EVENT", "official CLI не отдал rate_limit_event"
 
-    def drain(secs):
-        end = _time.time() + secs
-        while _time.time() < end:
-            r, _, _ = _select.select([master], [], [], 0.3)
-            if r:
-                try:
-                    data = _os.read(master, 65536)
-                except OSError:
-                    return
-                if not data:
-                    return
-                buf.extend(data)
 
-    try:
-        drain(min(7.0, timeout * 0.3))
-        screen = _clean_tty(buf)
-        low = screen.lower()
-        if "login method" in low or "welcome to claude" in low:
-            return [], "CLAUDE_ONBOARDING_REQUIRED", "onboarding/login блокирует /usage"
-        # Диалог доверия к каталогу (folder trust — не login): принять Enter.
-        if "trust this folder" in low or "trust the files" in low:
-            _os.write(master, b"\r")
-            drain(2.0)
-        buf.clear()
-        # Ввести /usage и отправить. Slash-autocomplete может требовать второй Enter
-        # (первый принимает completion, второй исполняет команду).
-        _os.write(master, b"/usage")
-        drain(1.2)
-        _os.write(master, b"\r")
-        drain(1.2)
-        _os.write(master, b"\r")
-        drain(min(9.0, timeout * 0.5))
-        panel = _clean_tty(buf)
-    finally:
-        try:
-            _os.write(master, b"\x03")
-            _time.sleep(0.2)
-            _os.write(master, b"\x03")
-        except OSError:
-            pass
-        try:
-            p.terminate()
-            p.wait(timeout=3)
-        except Exception:  # noqa: BLE001
-            try:
-                p.kill()
-            except Exception:  # noqa: BLE001
-                pass
-        _os.close(master)
-    windows = _parse_claude_usage(panel)
-    if not windows:
-        # Официальная проба выполнена (ready-prompt достигнут), но интерактивная
-        # панель /usage не рендерится/не парсится в headless PTY этой версии CLI.
-        # Точная причина вместо немого UNKNOWN; план берётся из auth status.
-        return [], "CLAUDE_USAGE_TUI_NOT_HEADLESS", "Claude Code /usage не отдаёт панель headless"
-    return windows, "", ""
 
 
 def probe_capacity(provider: str, root_path: str, *, executable: str,
-                   run_as_user: str | None = None, timeout: float = 30.0) -> dict:
-    """Диспетчер по провайдеру. Возвращает нормализованный результат ёмкости."""
+                   run_as_user: str | None = None, timeout: float = 30.0,
+                   start_window: bool = False) -> dict:
+    """Диспетчер по провайдеру. Возвращает нормализованный результат ёмкости.
+    ``start_window`` (только Claude) → owner-действие «Начать окно и обновить»."""
     if provider == "codex":
         return probe_codex_capacity(root_path, executable=executable, run_as_user=run_as_user,
                                     timeout=timeout)
     if provider == "claude":
         return probe_claude_capacity(root_path, executable=executable, run_as_user=run_as_user,
-                                     timeout=timeout)
+                                     timeout=max(timeout, 60.0), start_window=start_window)
     return _cap_error(provider or "unknown", "UNSUPPORTED_PROVIDER", f"provider={provider}")
 
 
 def capacity_status_from_windows(windows: list[dict]) -> str:
-    """AVAILABLE/LOW/EXHAUSTED/UNKNOWN из числовых окон (по максимальному used%)."""
+    """AVAILABLE/LOW/EXHAUSTED/UNKNOWN из окон.
+
+    Учитывает и числовые окна (Codex ``used_pct``), и статус-окна (Claude
+    ``rate_limit_event`` status): ``rejected`` → EXHAUSTED, ``warning`` → LOW,
+    ``allowed`` → AVAILABLE. Явный статус исчерпания/предупреждения приоритетнее."""
+    statuses = [(w.get("status") or "").lower() for w in windows if w.get("status")]
     used = [w["used_pct"] for w in windows if w.get("used_pct") is not None]
-    if not used:
-        return "UNKNOWN"
-    mx = max(used)
-    if mx >= 100:
+    mx = max(used) if used else None
+    if "rejected" in statuses or (mx is not None and mx >= 100):
         return "EXHAUSTED"
-    if mx >= 80:
+    if "warning" in statuses or (mx is not None and mx >= 80):
         return "LOW"
-    return "AVAILABLE"
+    if mx is not None or "allowed" in statuses:
+        return "AVAILABLE"
+    return "UNKNOWN"
 
 
 # --- Персистентность + reconcile (single-flight, bounded) ----------------------
@@ -386,31 +426,80 @@ def _parse_iso(v: str | None):
         return None
 
 
+def _latest_windowed_observation(s, profile_id: str):
+    """Последнее наблюдение с реальными числовыми окнами (валидное ИЛИ ранее
+    перенесённое STALE — оно сохраняет исходный ``data_observed_at``). Основа
+    stale-fallback: неудачная проба не должна затирать валидные числа пустым
+    свежим UNKNOWN."""
+    from sqlalchemy import select as _sel
+
+    from .orm import CapacityObservation
+    rows = s.execute(_sel(CapacityObservation)
+                     .where(CapacityObservation.profile_id == profile_id)
+                     .order_by(CapacityObservation.observed_at.desc()).limit(20)).scalars().all()
+    for r in rows:
+        if (r.windows_json or "[]") not in ("[]", "", None):
+            return r
+    return None
+
+
 def persist_capacity(profile_id: str, cap: dict) -> dict:
     """Сохранить нормализованное наблюдение ёмкости (safe-поля) в
-    ``capacity_observations``. Возвращает to_dict() новой строки."""
+    ``capacity_observations``. Возвращает to_dict() новой строки.
+
+    Stale-fallback (§11.6): успешная числовая проба пишет свежее наблюдение;
+    неудачная (пустые окна) — **не затирает** валидные числа, а переносит
+    последние валидные окна как ``STALE`` с новым error_code и временем сбоя,
+    сохраняя честный ``data_observed_at`` (возраст данных). Если валидного
+    наблюдения ещё не было — точное недоступное состояние с error_code (не немой
+    UNKNOWN). Авторизация здесь не меняется — сбой ёмкости ≠ AUTH_REQUIRED."""
     from .db import session_scope
     from .ids import new_id
     from .orm import CapacityObservation
     wins = cap.get("windows") or []
-    by = {w["id"]: w for w in wins}
-    five = by.get("5h")
-    seven = by.get("7d") or by.get("1d")
-    status = capacity_status_from_windows(wins)
-    primary_reset = (five or seven or {}).get("reset_at") if wins else None
+    now = _dt.now(tz=_tz.utc)
+    err = (cap.get("error_code") or "")[:60]
     with session_scope() as s:
-        row = CapacityObservation(
-            id=new_id("cap"), profile_id=profile_id, status=status,
-            five_h_used_pct=(five or {}).get("used_pct") if five else None,
-            seven_d_used_pct=(seven or {}).get("used_pct") if seven else None,
-            reset_at=_parse_iso(primary_reset),
-            source=cap.get("source", "unknown")[:30],
-            confidence="official" if wins else ("plan_only" if cap.get("plan") else "none"),
-            stale=False, plan=(cap.get("plan") or "")[:40],
-            five_h_reset_at=_parse_iso((five or {}).get("reset_at")) if five else None,
-            seven_d_reset_at=_parse_iso((seven or {}).get("reset_at")) if seven else None,
-            error_code=(cap.get("error_code") or "")[:60],
-            windows_json=_json.dumps(wins, ensure_ascii=False))
+        if wins:
+            by = {w["id"]: w for w in wins}
+            five = by.get("5h")
+            seven = by.get("7d") or by.get("1d")
+            status = capacity_status_from_windows(wins)
+            primary_reset = (five or seven or {}).get("reset_at")
+            row = CapacityObservation(
+                id=new_id("cap"), profile_id=profile_id, status=status,
+                five_h_used_pct=(five or {}).get("used_pct") if five else None,
+                seven_d_used_pct=(seven or {}).get("used_pct") if seven else None,
+                reset_at=_parse_iso(primary_reset),
+                source=cap.get("source", "unknown")[:30], confidence="official",
+                stale=False, plan=(cap.get("plan") or "")[:40],
+                five_h_reset_at=_parse_iso((five or {}).get("reset_at")) if five else None,
+                seven_d_reset_at=_parse_iso((seven or {}).get("reset_at")) if seven else None,
+                error_code=err, windows_json=_json.dumps(wins, ensure_ascii=False),
+                observed_at=now, data_observed_at=now)
+        else:
+            prev = _latest_windowed_observation(s, profile_id)
+            if prev is not None:
+                # Перенос последних валидных окон как STALE: данные прежние,
+                # observed_at = момент неудачной проверки, data_observed_at сохранён.
+                row = CapacityObservation(
+                    id=new_id("cap"), profile_id=profile_id, status="STALE",
+                    five_h_used_pct=prev.five_h_used_pct, seven_d_used_pct=prev.seven_d_used_pct,
+                    reset_at=prev.reset_at, source=prev.source, confidence="stale", stale=True,
+                    plan=(cap.get("plan") or prev.plan or "")[:40],
+                    five_h_reset_at=prev.five_h_reset_at, seven_d_reset_at=prev.seven_d_reset_at,
+                    error_code=err or "CAPACITY_REFRESH_FAILED",
+                    windows_json=prev.windows_json,
+                    observed_at=now, data_observed_at=(prev.data_observed_at or prev.observed_at))
+            else:
+                # Валидных чисел никогда не было → точное недоступное состояние.
+                row = CapacityObservation(
+                    id=new_id("cap"), profile_id=profile_id, status="UNKNOWN",
+                    five_h_used_pct=None, seven_d_used_pct=None, reset_at=None,
+                    source=cap.get("source", "unknown")[:30],
+                    confidence="plan_only" if cap.get("plan") else "none", stale=False,
+                    plan=(cap.get("plan") or "")[:40], error_code=err,
+                    windows_json="[]", observed_at=now, data_observed_at=now)
         s.add(row)
         s.commit()
         return row.to_dict()
@@ -418,7 +507,8 @@ def persist_capacity(profile_id: str, cap: dict) -> dict:
 
 def _load_registry(path: str | None = None) -> dict:
     try:
-        return _json.load(open(path or _REGISTRY_PATH))["profiles"]
+        with open(path or _REGISTRY_PATH) as fh:
+            return _json.load(fh)["profiles"]
     except (OSError, KeyError, ValueError):
         return {}
 
@@ -435,35 +525,52 @@ def _profile_id_for_alias(alias: str) -> str | None:
 
 def reconcile_capacity(*, prober=None, registry_path: str | None = None,
                        aliases: list[str] | None = None, force: bool = False,
-                       timeout: float = 30.0) -> list[dict]:
-    """Пробит ёмкость по всем (или указанным) alias и персистит наблюдения.
-    Bounded single-flight: повторный вызов в пределах интервала — no-op (если не
-    force). ``prober(provider, root, exe, user, timeout)`` инъектируется в тестах."""
+                       timeout: float = 30.0, start_window: bool = False) -> list[dict]:
+    """Пробит ёмкость по alias и персистит наблюдения. Ограничения (§11.6):
+
+    * **single-flight**: если сверка уже идёт — честно вернуть
+      ``state=REFRESH_IN_PROGRESS`` (не запускать вторую и не устраивать шторм);
+    * **per-alias cooldown** ``_CAP_MIN_INTERVAL_S``: слишком частый refresh
+      возвращает ``state=COOLDOWN`` c ``cooldown_remaining_s`` (без пробы);
+    * ``force=True`` — bypass cooldown; допускается **только** из доверенного
+      deploy/admin-пути (CLI). HTTP-refresh вызывает без force и уважает интервал.
+    * ``start_window`` (только Claude) — owner-действие «Начать окно и обновить»
+      (один минимальный официальный ответ, немного подписки).
+
+    ``prober(provider, root, exe, user, timeout)`` инъектируется в тестах."""
     probe = prober or (lambda provider, root, exe, user, to: probe_capacity(
-        provider, root, executable=exe, run_as_user=user, timeout=to))
+        provider, root, executable=exe, run_as_user=user, timeout=to,
+        start_window=start_window))
     reg = _load_registry(registry_path)
     targets = aliases or list(reg.keys())
-    out = []
     if not _cap_lock.acquire(blocking=False):
-        return out  # single-flight: другой reconcile уже идёт
+        # Другой refresh уже идёт — честный статус вместо немого no-op/дубля.
+        return [{"alias": a, "state": "REFRESH_IN_PROGRESS"} for a in targets] or \
+               [{"alias": None, "state": "REFRESH_IN_PROGRESS"}]
+    out: list[dict] = []
     try:
         now = _time.time()
         for alias in targets:
             p = reg.get(alias)
             if not p:
+                out.append({"alias": alias, "state": "UNKNOWN_ALIAS"})
                 continue
-            if not force and (now - _cap_last.get(alias, 0.0)) < _CAP_MIN_INTERVAL_S:
+            since = now - _cap_last.get(alias, 0.0)
+            if not force and since < _CAP_MIN_INTERVAL_S:
+                out.append({"alias": alias, "state": "COOLDOWN",
+                            "cooldown_remaining_s": round(_CAP_MIN_INTERVAL_S - since, 1)})
                 continue
             pid = _profile_id_for_alias(alias)
             if not pid:
+                out.append({"alias": alias, "state": "NO_PROFILE"})
                 continue
             cap = probe(p.get("provider", ""), p["root_path"], p["executable_path"],
                         p.get("runtime_user"), timeout)
             _cap_last[alias] = _time.time()
             rec = persist_capacity(pid, cap)
-            out.append({"alias": alias, **{k: cap.get(k) for k in
-                        ("plan", "auth_ok", "source", "error_code")}, "status": rec["status"],
-                        "windows": cap.get("windows", [])})
+            out.append({"alias": alias, "state": "REFRESHED",
+                        **{k: cap.get(k) for k in ("plan", "auth_ok", "source", "error_code")},
+                        "status": rec["status"], "windows": cap.get("windows", [])})
     finally:
         _cap_lock.release()
     return out

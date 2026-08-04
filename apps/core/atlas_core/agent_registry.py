@@ -149,11 +149,17 @@ class ProfileService:
                         .order_by(CapacityObservation.observed_at.desc()).limit(1)).scalars().first()
         if row is None:
             return {"status": "UNKNOWN", "five_h_used_pct": None, "seven_d_used_pct": None,
-                    "reset_at": None, "source": "unknown", "observed_at": None}
+                    "reset_at": None, "source": "unknown", "observed_at": None,
+                    "data_observed_at": None, "windows": [], "plan": "", "error_code": "",
+                    "confidence": "none", "stale": False}
         d = row.to_dict()
-        age = (_now() - _aware(row.observed_at)).total_seconds()
+        # Свежесть по возрасту ДАННЫХ (data_observed_at), а не по времени последней
+        # проверки: протухшее наблюдение → STALE (кроме честного UNKNOWN).
+        basis = _aware(row.data_observed_at) or _aware(row.observed_at)
+        age = (_now() - basis).total_seconds()
         if age > CAPACITY_TTL_S and d["status"] not in ("UNKNOWN",):
             d["status"] = "STALE"
+            d["stale"] = True
         return d
 
     def _active_lease(self, s, profile_id: str) -> dict | None:

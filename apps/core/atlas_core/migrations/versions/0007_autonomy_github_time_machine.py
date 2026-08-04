@@ -161,11 +161,16 @@ def upgrade() -> None:
                   sa.Column("error_code", sa.String(length=60), nullable=False, server_default=""))
     op.add_column("capacity_observations",
                   sa.Column("windows_json", sa.Text(), nullable=False, server_default="[]"))
+    # Stale-fallback: момент наблюдения самих данных (окон), отдельно от observed_at
+    # (момент записи/проверки). При STALE-переносе сохраняет честный возраст данных.
+    op.add_column("capacity_observations",
+                  sa.Column("data_observed_at", sa.DateTime(), nullable=True))
 
 
 def downgrade() -> None:
     with op.batch_alter_table("capacity_observations") as b:
-        for col in ("windows_json", "error_code", "seven_d_reset_at", "five_h_reset_at", "plan"):
+        for col in ("data_observed_at", "windows_json", "error_code", "seven_d_reset_at",
+                    "five_h_reset_at", "plan"):
             b.drop_column(col)
     with op.batch_alter_table("profile_health") as b:
         b.drop_column("source")

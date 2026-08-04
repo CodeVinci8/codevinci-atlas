@@ -338,6 +338,15 @@ export const api = {
       `/api/v1/checkpoints/${id}/rollback-preview`, "POST", { grant_id: grantId }),
   authHealthReport: () =>
     getJSON<{ auth_health: AuthHealthRow[] }>("/api/v1/profiles/auth-health/report"),
+  refreshCapacity: (alias?: string) =>
+    sendJSON<{ refreshed: CapacityRefreshRow[]; refresh_in_progress: boolean }>(
+      `/api/v1/profiles/capacity/refresh${alias ? `?alias=${encodeURIComponent(alias)}` : ""}`,
+      "POST", {}),
+  startWindow: (alias: string) =>
+    sendJSON<{ started: CapacityRefreshRow[] }>(
+      `/api/v1/profiles/capacity/start-window?alias=${encodeURIComponent(alias)}`, "POST", {}),
+  claudePoolSummary: () =>
+    getJSON<{ claude_pool: ClaudePoolSummary }>("/api/v1/profiles/claude-pool/summary"),
 };
 
 // --- VP-5 types ------------------------------------------------------------
@@ -376,9 +385,27 @@ export interface ProviderSessionRow {
   id: string; run_id: string; role: string; provider: string;
   profile_id: string; session_id: string; status: string; started_at: string;
 }
+export interface CapacityWindow {
+  id: string; label: string; used_pct: number | null; remaining_pct: number | null;
+  reset_at: string | null; window_mins: number | null; reset_text?: string;
+  // VP-7 Claude: официальный статус окна (allowed|warning|rejected) без числа %.
+  status?: string;
+}
+export interface ClaudePoolSummary {
+  pool: string; members: string[]; authorized_count: number; eligible_count: number;
+  active_alias: string; next_reset: string | null; last_reason: string;
+  conservative_fallback: boolean;
+}
 export interface CapacityView {
   status: string; five_h_used_pct: number | null; seven_d_used_pct: number | null;
   reset_at: string | null; source: string; observed_at: string | null;
+  // VP-7 numeric limits: полные окна, план, точная причина недоступности, свежесть.
+  windows?: CapacityWindow[]; plan?: string; error_code?: string;
+  confidence?: string; stale?: boolean; data_observed_at?: string | null;
+}
+export interface CapacityRefreshRow {
+  alias: string | null; state: string; cooldown_remaining_s?: number;
+  status?: string; error_code?: string; plan?: string; source?: string;
 }
 export interface ProfileHealthView {
   auth_status: string; plan_label: string; cli_version: string;
@@ -397,11 +424,14 @@ export interface ModelRow {
   id: string; provider: string; model_id: string; alias: string; display: string;
   availability: string; source: string; confidence: string; discovered_at: string;
 }
-export interface NextAction { code: string; text: string; target: string; count?: number; }
+export interface NextAction {
+  code: string; text: string; target: string; count?: number; actionable?: boolean;
+}
 export interface SystemSummary {
   collected_at: string; atlas_version: string; db_migration: string | null;
   cpu: { logical_cores: number | null; load_avg: number[] | null;
-         utilization_pct: number | null; sample_window_s: number | null; util_source: string };
+         utilization_pct: number | null; sample_window_s: number | null;
+         util_source: string; util_state: string };
   memory: { total_bytes: number | null; used_bytes: number | null };
   disk: { total_bytes: number | null; used_bytes: number | null };
   os: { os_name: string | null; os_version: string | null; kernel: string | null;

@@ -64,7 +64,8 @@ def seed(data_dir: str) -> None:
                            created_at=_now(), updated_at=_now()))
             db.commit()
 
-    # профили → durable + auth-health (READY/AUTH_EXPIRED/STALE) через фейковый пробер
+    # профили → durable + auth-health (READY) через фейковый пробер
+    from atlas_core.agent_registry import ProfileService
     from atlas_core.auth_health import run_auth_health
     from atlas_core.profile_reconcile import reconcile_profiles
     from atlas_core.profiles import ProfileRegistry
@@ -74,9 +75,53 @@ def seed(data_dir: str) -> None:
         m = {"codex-plus-01": {"authenticated": True, "state": "READY"},
              "codex-plus-02": {"authenticated": True, "state": "READY"},
              "claude-pro-01": {"authenticated": True, "state": "READY"},
-             "claude-pro-02": {"authenticated": False, "state": "AUTH_EXPIRED"}}
+             "claude-pro-02": {"authenticated": True, "state": "READY"}}
         return {"cli_version": "fixture 1.0", "auth": m[prof.alias]}
     run_auth_health(registry=ProfileRegistry(str(reg)), prober=prober, actor="chrome-fixture")
+
+    # --- VP-7 capacity observations: реальные значения последней пробы ---------
+    # Codex — числовые окна (68% / 96% LOW); Claude — status-окна rate_limit_event
+    # (allowed / rejected). Плюс демонстрация STALE-fallback на codex-plus-02.
+    from atlas_core.capacity import persist_capacity
+    from atlas_core.claude_pool import select_builder
+    ids = {p["alias"]: p["id"] for p in ProfileService().list_profiles()}
+    reset7d = (_now() + timedelta(days=4)).isoformat()
+    reset5h_ok = (_now() + timedelta(hours=2)).isoformat()
+    reset5h_bad = (_now() + timedelta(hours=1)).isoformat()
+
+    def _num_win(wid, used, reset, mins):
+        return {"id": wid, "label": {"5h": "Сессия (5 ч)", "7d": "Неделя (7 дн)"}[wid],
+                "used_pct": used, "remaining_pct": round(100 - used, 1), "reset_at": reset,
+                "window_mins": mins}
+
+    def _stat_win(wid, status, reset, mins):
+        return {"id": wid, "label": {"5h": "Сессия (5 ч)", "7d": "Неделя (7 дн)"}[wid],
+                "used_pct": (100.0 if status == "rejected" else None),
+                "remaining_pct": None, "reset_at": reset, "window_mins": mins, "status": status}
+
+    persist_capacity(ids["codex-plus-01"], {"provider": "codex", "plan": "plus", "auth_ok": True,
+        "source": "codex-app-server", "error_code": "", "windows": [_num_win("7d", 68.0, reset7d, 10080)]})
+    # codex-plus-02: сначала валидное 96% (LOW), затем неудачный refresh → STALE-fallback.
+    persist_capacity(ids["codex-plus-02"], {"provider": "codex", "plan": "plus", "auth_ok": True,
+        "source": "codex-app-server", "error_code": "", "windows": [_num_win("7d", 96.0, reset7d, 10080)]})
+    persist_capacity(ids["codex-plus-02"], {"provider": "codex", "plan": "plus", "auth_ok": True,
+        "source": "codex-probe", "error_code": "CODEX_APPSERVER_IO_FAILED", "windows": []})
+    persist_capacity(ids["claude-pro-01"], {"provider": "claude", "plan": "pro", "auth_ok": True,
+        "source": "claude-stream-json", "error_code": "",
+        "windows": [_stat_win("5h", "rejected", reset5h_bad, 300)]})
+    persist_capacity(ids["claude-pro-02"], {"provider": "claude", "plan": "pro", "auth_ok": True,
+        "source": "claude-stream-json", "error_code": "",
+        "windows": [_stat_win("5h", "allowed", reset5h_ok, 300)]})
+
+    # Активный Claude Builder (claude-pro-02) + запись причины роутинга (для pool summary).
+    from atlas_core.ids import new_id
+    from atlas_core.orm import RunLease
+    with session_scope() as db:
+        db.add(RunLease(id=new_id("rl"), run_id="run_ok", role="builder",
+                        profile_id=ids["claude-pro-02"], worktree="wt-vp7", holder="core",
+                        acquired_at=_now().isoformat()))
+        db.commit()
+    select_builder(ProfileService().list_profiles(), actor="chrome-fixture")
 
     # --- VP-7 гранты: ACTIVE / EXPIRED / REVOKED ---------------------------
     from atlas_core import autonomy
@@ -126,7 +171,9 @@ def seed(data_dir: str) -> None:
             pr_url="https://github.com/CodeVinci8/codevinci-atlas/pull/13", pr_state="OPEN",
             checks_state="GREEN", checks_head_sha="f6c3d0e0a9da4b063c5d3dcc63064e94c0ccc9e9",
             mergeable=True, merge_state="CLEAN", gate_decision="PERMIT", gate_reason="MERGE_PERMITTED",
-            grant_id=g_active["id"], created_at=_now(), updated_at=_now()))
+            grant_id=g_active["id"], idempotency_key="CodeVinci8/codevinci-atlas|main|"
+            "atlas/vp-7-autonomy-github-time-machine|f6c3d0e0a9da",
+            created_at=_now(), updated_at=_now()))
         db.add(GithubDelivery(
             id=new_id("ghd"), project_id="proj_web", repo="CodeVinci8/codevinci-atlas",
             base="main", branch="atlas/vp-7-stale", head_sha="deadbeefdeadbeefdeadbeef",
@@ -134,6 +181,7 @@ def seed(data_dir: str) -> None:
             pr_state="OPEN", checks_state="PENDING", checks_head_sha="oldsha0000",
             mergeable=False, merge_state="BLOCKED", gate_decision="DENY",
             gate_reason="STALE_OR_FAILING_CI", grant_id=g_active["id"],
+            idempotency_key="CodeVinci8/codevinci-atlas|main|atlas/vp-7-stale|deadbeefdead",
             created_at=_now() - timedelta(minutes=5), updated_at=_now()))
         db.commit()
 
