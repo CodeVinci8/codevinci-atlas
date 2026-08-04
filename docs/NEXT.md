@@ -47,24 +47,33 @@
 (раздельные capabilities, fail-closed), Emergency Stop, GitHub-адаптер (`gh`) +
 STANDARD merge gate (current-head, stale PASS/CI → deny), Time Machine
 (checkpoints/replay/compare), Apache-2.0 LICENSE + reuse-аудит, read-only
-auth-health 4 профилей, отложенный реальный VP-6 Quality E2E (≤4 вызова),
-бренд/favicon/реальная CPU-утилизация/контекстное next-action. Миграция — `0007`.
+auth-health, официальная numeric-ёмкость (Claude status-line + Codex app-server),
+single-Claude пул (registry-driven, claude-pro-02 disabled), production Run-start
+роутинг, бренд/favicon/реальная CPU-утилизация. Миграция — `0007`.
 Живая БД — `0006_review_quality` (мигрирует на `0007` при deploy).
 
 ## NEXT_ACTION
 
-Owner проводит финальный визуальный обзор **VP-7 Автономия/Time Machine/Пульс**
-на `http://127.0.0.1:3210` (SSH-туннель): «Автономия» — режимы, capability-матрица
-(недоступные через автономию помечены owner-only), гранты (scope/бюджет/срок),
-Emergency Stop + явный resume, GitHub-доставка и merge gate; «Time Machine» —
-хронология чекпоинтов, сравнение, replay/rollback preview (read-only, destructive
-недоступен без отдельного grant); «Пульс» — реальная CPU-утилизация (кольцо),
-контекстное next action отдельно от рисков, load average — в диагностике; favicon
-и brand-home; RU/EN.
+Финальный независимый Reviewer **call 8/8** по исправленному head (после того как
+все правки закоммичены, запушены и CI зелёный на точном PR head). call 7/7 уже
+израсходован (genuine REVISE на `4517ebd`, находки исправлены в `6aa2d20`). При
+genuine PASS — авторитетный STANDARD-merge PR #13, backup, миграция `0006→0007`,
+рестарт стека, live-smoke, truth-sync. При REVISE — не мержить, зафиксировать
+блокеры.
+
+## VP-8 (записано, НЕ реализовано)
+
+- Удобная авторизация/реавторизация Codex и Claude прямо в Profiles.
+- Добавление/замена профилей без правок кода (registry-driven пул уже готов).
+- Поддержанные официальные login/attach-флоу; привязка второго Claude-аккаунта.
+- Изолированный owner-only cookie-import адаптер (если будет одобрен отдельно);
+  по умолчанию выключен; без browser-extraction и обхода MFA.
+- Хранение секретов зашифровано вне Core DB/логов.
+- Полный операционный console Profiles/Pulse (40 профилей, login/refresh/quotas/
+  usage-history).
 
 ## Границы
 
-Активный гейт — **VP-7** (WIP=1). **VP-8/VP-9 не начинать.** Полный операционный
-console Profiles/Pulse (40 профилей, login/refresh/quotas/usage-history) — VP-8.
-File Atelier release-proof — VP-9. Cookie-import — `UNSUPPORTED`. LICENSE —
+Активный гейт — **VP-7** (WIP=1). **VP-8/VP-9 не начинать.** File Atelier
+release-proof — VP-9. Cookie-import — `UNSUPPORTED` в VP-7. LICENSE —
 **Apache-2.0** (owner-решение, §49; см. DECISIONS).

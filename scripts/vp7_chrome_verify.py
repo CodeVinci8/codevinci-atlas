@@ -111,12 +111,16 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0915
             for alias in ("codex-plus-01", "codex-plus-02", "claude-pro-01", "claude-pro-02"):
                 check(f"alias visible {alias}", alias in body, "")
             check("Codex numeric window 68%", "68%" in body or "68.0%" in body, "")
-            check("Claude status window rendered",
-                  ("Исчерпано" in body or "Доступно" in body), "allowed/rejected")
+            # Claude — численные окна (used_percentage из status-line): 23.5% / 41.2%.
+            check("Claude numeric window (23.5%)", "23.5%" in body or "23%" in body, "used_percentage")
             check("auth Авторизован present", "Авторизован" in body, "")
             check("pool summary present", "Claude-пул" in body, "")
             check("start-window button present", "Начать окно" in body, "")
             check("stale fallback shown", ("Последние известные" in body or "STALE" in body), "")
+            # claude-pro-02 disabled: показан «Отключён» + причина (истёкшая подписка).
+            check("claude-pro-02 disabled shown", ("Отключён" in body or "DISABLED" in body),
+                  "disabled treatment")
+            check("disabled reason (истёкшая подписка)", "истёкшая подписка" in body, "")
             page.screenshot(path=str(OUT / "profiles-detail-1440.png"), full_page=True)
             shots += 1
             # Focus-target: первая кнопка фокусируется.

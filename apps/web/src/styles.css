@@ -127,11 +127,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* --- panels & cards --- */
+/* VP-7 refinement: единый вертикальный ритм (22px между секциями), чуть больше
+   воздуха внутри панелей, выразительный заголовок секции (bench: TonWave). */
 .panel, .card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 20px; margin-bottom: 18px;
+  border-radius: var(--radius); padding: 22px; margin-bottom: 22px;
 }
-.panel h2, .card h2 { font-size: 15px; margin: 0 0 14px; letter-spacing: .01em; }
+.panel h2, .card h2 {
+  font-size: 15px; margin: 0 0 16px; letter-spacing: .01em; font-weight: 650;
+}
 .sub-h { font-size: 13px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 
 /* --- next action (один явный следующий шаг) --- */
@@ -332,6 +336,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   transition: border-color 160ms ease;
 }
 .p-card:hover { border-color: var(--ember-dim); }
+/* Отключённый профиль: приглушён, без hover-акцента (soft removal, §2). */
+.p-card-disabled { opacity: .62; }
+.p-card-disabled:hover { border-color: var(--border); }
+.p-disabled-note { margin: 2px 0 0; }
 .p-card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .p-alias { font-weight: 600; }
 .p-prov { font-size: 12px; }

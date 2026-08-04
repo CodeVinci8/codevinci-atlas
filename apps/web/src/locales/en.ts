@@ -452,6 +452,7 @@ export const en: Catalog = {
   "profiles.refreshInProgress": "A refresh is already in progress",
   "profiles.staleData": "Last known numbers (refresh failed)",
   "profiles.noNumeric": "Numeric limits unavailable",
+  "profiles.disabledNote": "Disabled by owner — expired subscription. Replacement in VP-8. Not in the active pool or capacity.",
   "caperr.CLAUDE_ONBOARDING_REQUIRED":
     "Numeric limits unavailable in installed Claude Code: interactive /usage is blocked by onboarding in the isolated official CLI environment.",
   "caperr.CLAUDE_USAGE_TUI_NOT_HEADLESS":

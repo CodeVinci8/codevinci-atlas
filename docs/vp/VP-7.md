@@ -163,10 +163,39 @@ REVISE** (accounting **7/7**) с двумя реальными находкам�
 Обе находки исправлены с тестами (`test_authoritative_base_mismatch_denies`,
 `…_base_matches_live_permits`, `…_baseline_derived_from_rp`, `…_scope_derived_from_rp`).
 **Merge НЕ исполнялся** (gate отклонил, `merge_executed=false`); PASS не фабриковался.
-Согласно owner-правилу genuine REVISE — легитимный блокер: VP-7 **не закрыт** этой
-сессией. Правка **не проверена** (единственный авторизованный вызов Reviewer
-израсходован). NEXT: owner авторизует новый Reviewer-вызов по исправленному head;
-при genuine PASS — merge/backup/миграция/deploy/truth-sync.
+
+**call 7/7 immutable, call 8/8 — новый вызов.** Правки после call-7 меняют PR head,
+поэтому следующий независимый Reviewer — **call 8/8** (не повторный 7/7). call-7
+evidence сохранён в `var/artifacts/vp7/final_review/call-7/` (REVISE@`4517ebd`);
+call-8 пишет в `call-8/` и не перезаписывает call-7. call-7 никогда не
+переименовывается в PASS.
+
+8. **Официальная numeric-ёмкость Claude (status-line, §3).** Числа из
+   документированного status-line `rate_limits` (`five_hour/seven_day` ×
+   `used_percentage`/`resets_at`) через эфемерный `--settings` statusLine → spool
+   0600; предпочтительно, fallback — `rate_limit_event`. Диагностика v2.1.220:
+   numeric путь закрыт onboarding-login изолированного профиля (login запрещён +
+   блокируется safety-классификатором; forge `hasCompletedOnboarding` запрещён) →
+   для профиля с незавершённым onboarding честный fallback; collector numeric-
+   capable (реальные % при завершённом onboarding). remaining = `100 − used%`.
+9. **Один активный Claude (§2).** `claude-pro-02` (истёкшая подписка) durable
+   disabled: не в активном пуле/UI/ёмкости; unix-user/home/creds не удалены;
+   история сохранена. `CLAUDE_POOL` хардкод → registry-driven открытие
+   (`claude_pool_aliases`): attach нового профиля в VP-8 без правок кода. «2/2»
+   устранено; фиктивного combined-% нет.
+10. **Production Run-start роутинг (§5).** `runtime.start_builder_run` +
+    `POST /runs/{id}/start`: кандидаты из durable-реестра, registry-driven
+    `select_builder`, одна аренда (один writer), bounded Builder под изолированным
+    профилем, provider-session/router-decision durable, safe rate-limit handoff
+    (РОВНО один switch на eligible, иначе OWNER_REQUIRED, без loop), restart без
+    дублей. E2E входит через production-метод (не `select_builder` напрямую).
+11. **Sub2API (§4).** REFERENCE/LGPL-3.0; отвергнут недокументированный OAuth
+    usage-endpoint + TLS-fingerprint; общие паттерны переосмыслены независимо; 0
+    строк скопированного кода (см. REUSE_REGISTER).
+
+Согласно owner-правилу genuine REVISE — легитимный блокер call-7; находки
+исправлены. VP-7 закрывается только при genuine PASS call-8 на исправленном head,
+затем merge/backup/миграция/deploy/truth-sync.
 
 ## Границы (не VP-8/VP-9)
 

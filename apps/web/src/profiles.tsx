@@ -190,24 +190,37 @@ function ProfileCard({ p, auth, refresh, startWindow, rstate, t, locale }: {
   p: ProfileView; auth: string; refresh: () => void; startWindow: () => void;
   rstate: RefreshState; t: T; locale: Locale;
 }) {
+  // Отключённый профиль (истёкшая подписка): приглушён, без ёмкости/действий,
+  // с явной причиной — но исторически присутствует (soft removal, §2).
+  const disabled = p.enabled === false || p.state === "DISABLED";
   return (
-    <article className="p-card">
+    <article className={`p-card${disabled ? " p-card-disabled" : ""}`}>
       <header className="p-card-h">
         <span className="mono p-alias">{p.alias}</span>
         <span className="muted p-prov">{p.provider}</span>
       </header>
-      {/* auth truth — независимо от ёмкости */}
-      <div className="p-row"><AuthBadge status={auth} t={t} /><StateBadge state={p.state} t={t} /></div>
-      <div className="p-row">
-        <span className="label">{t("profiles.plan")}</span>
-        <span>{planLabel(p.provider, p.capacity.plan || p.health?.plan_label, t)}</span>
-      </div>
-      {p.active_lease && (
-        <div className="p-row"><span className="label">{t("profiles.currentRun")}</span>
-          <span className="mono">{p.active_lease.role}</span></div>
+      {disabled ? (
+        <>
+          <div className="p-row"><StateBadge state="DISABLED" t={t} /></div>
+          <p className="muted small p-disabled-note">{t("profiles.disabledNote")}</p>
+        </>
+      ) : (
+        <>
+          {/* auth truth — независимо от ёмкости */}
+          <div className="p-row"><AuthBadge status={auth} t={t} />
+            <StateBadge state={p.state} t={t} /></div>
+          <div className="p-row">
+            <span className="label">{t("profiles.plan")}</span>
+            <span>{planLabel(p.provider, p.capacity.plan || p.health?.plan_label, t)}</span>
+          </div>
+          {p.active_lease && (
+            <div className="p-row"><span className="label">{t("profiles.currentRun")}</span>
+              <span className="mono">{p.active_lease.role}</span></div>
+          )}
+          <CapacityBlock p={p} cap={p.capacity} refresh={refresh} startWindow={startWindow}
+                         rstate={rstate} t={t} locale={locale} />
+        </>
       )}
-      <CapacityBlock p={p} cap={p.capacity} refresh={refresh} startWindow={startWindow}
-                     rstate={rstate} t={t} locale={locale} />
     </article>
   );
 }

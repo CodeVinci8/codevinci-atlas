@@ -38,15 +38,27 @@
   синхронизировался в БД). Полная регрессия **268 OK**; Chrome — 43 скриншота,
   0 PII (Chromium 151.0.7922.34).
 - **VP-7 — Autonomy, GitHub & Time Machine (§40): В РАБОТЕ** на ветке
-  `atlas/vp-7-autonomy-github-time-machine` (от `main` `efee4c9`). Автономия (4
-  режима, capability-гранты, Emergency Stop), GitHub-адаптер (`gh`) + STANDARD
-  merge gate (current-head), Time Machine (checkpoints/replay/compare), Apache-2.0
-  LICENSE, read-only auth-health 4 профилей. Новая миграция — `0007`.
+  `atlas/vp-7-autonomy-github-time-machine` (от `main` `efee4c9`; PR #13 OPEN).
+  Автономия (4 режима, capability-гранты, Emergency Stop), GitHub-адаптер (`gh`) +
+  STANDARD merge gate (current-head), Time Machine (checkpoints/replay/compare),
+  Apache-2.0 LICENSE, read-only auth-health, официальная numeric-ёмкость Claude
+  (status-line rate_limits) + Codex (app-server), single-Claude пул (registry-
+  driven), production Run-start роутинг. Новая миграция — `0007`.
+- **Reviewer история (immutable):** call **7/7** проверил head `4517ebd` и вернул
+  genuine **REVISE** с двумя находками в `merge_gate.py` (base != live pr.base;
+  безусловные baseline/scope/owner-gate). Обе исправлены в **`6aa2d20`**
+  (`_derive_gate_facts`, live-base enforcement) с тестами. Следующий вызов —
+  **call 8/8** по исправленному head (call-7 не переименовывается в PASS).
+- **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
+  `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
+  ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude
+  привяжут в **VP-8**. Пул — registry-driven (не хардкод), «2/2» устранено.
 - **Стек запущен:** `http://127.0.0.1:3210` (SSH-туннель). Core/Web healthy,
   Runner READY. **Живая БД — `0006_review_quality`** (миграция на `0007` — при
   deploy VP-7, backup снимается до миграции).
-- **Профили:** 4 зарегистрированы (`codex-plus-01/02`, `claude-pro-01/02`);
-  per-profile идентичности (`atlas-cx01/02`, `atlas-cl01/02`) и исполняемые файлы
+- **Профили:** 4 зарегистрированы (`codex-plus-01/02`, `claude-pro-01/02`), из них
+  активны 3 (claude-pro-02 disabled); per-profile идентичности (`atlas-cx01/02`,
+  `atlas-cl01/02`) и исполняемые файлы
   `<root>/.local/bin/*`. **`AUTH_REQUIRED` в UI — консервативное durable-состояние,
   не доказательство протухания логинов.** Готовность подтверждается только
   bounded read-only auth-health (`codex login status`/`claude auth status`),
