@@ -396,6 +396,13 @@ class GitHubAdapter:
             raise GitContractError(
                 "GRANT_ENFORCEMENT_REQUIRED",
                 "enforce_grant=False недопустим с реальным GhForge (production write-путь)")
+        # Production-адаптер (реальный GhForge) ОБЯЗАН быть привязан к доверенному
+        # persisted project (§1 audit): без project_id нельзя доказать, что grant/
+        # RP/QR относятся к тому же проекту. LocalForge (тест) может быть unbound.
+        if isinstance(self.forge, GhForge) and not self.project_id:
+            raise GitContractError(
+                "ADAPTER_PROJECT_UNBOUND",
+                "production GitHubAdapter (GhForge) требует непустой project_id")
 
     def auth_status(self) -> dict:
         return self.forge.auth_status()
@@ -505,7 +512,15 @@ class GitHubAdapter:
         прямо перед merge → raw forge squash. Любой сбой условия → GitContractError,
         merge НЕ исполняется."""
         from .merge_gate import authorize_merge_execution
-        eff_project = project_id or self.project_id
+        # Project binding (§1 audit): merge требует адаптер, привязанный к проекту;
+        # caller project может только СОВПАСТЬ (не подменяет и не «оживляет» unbound).
+        if not self.project_id:
+            raise GitContractError("ADAPTER_PROJECT_UNBOUND",
+                                   "merge требует адаптер, привязанный к проекту")
+        if project_id and project_id != self.project_id:
+            raise GitContractError("PROJECT_MISMATCH",
+                                   f"caller project {project_id} != adapter project {self.project_id}")
+        eff_project = self.project_id
         auth = authorize_merge_execution(
             forge=self.forge, repo=self._forge_repo() or "", project_id=eff_project,
             review_package_id=review_package_id, quality_report_id=quality_report_id,
@@ -530,11 +545,20 @@ class GitHubAdapter:
                 name, email = configured_identity(str(Path(self.forge.bare).parent))
             except Exception:  # noqa: BLE001
                 pass
-        # TOCTOU: перечитать live head непосредственно перед исполнением.
+        # TOCTOU (§1 audit): перечитать ЖИВОЕ состояние из forge непосредственно
+        # перед squash — не только head, но и checks + mergeability. Списанный бюджет
+        # или прежнее решение НЕ делают изменившийся CI/mergeability приемлемым.
         fresh = self.forge.get_pr(pr_number)
         if fresh is None or fresh.state != "OPEN" or fresh.head_sha != expected_head:
             raise GitContractError("STALE_HEAD_AT_MERGE",
                                    f"head изменился перед merge (ожидался {expected_head[:12]})")
+        fresh_checks = self.forge.checks(expected_head)
+        if fresh_checks.get("state") != "GREEN" or fresh_checks.get("head_sha", "") != expected_head:
+            raise GitContractError("CI_NOT_GREEN_AT_MERGE",
+                                   f"CI не зелёный на текущем head перед merge (state={fresh_checks.get('state')})")
+        if not (self.forge.mergeability(pr_number) or {}).get("mergeable"):
+            raise GitContractError("NOT_MERGEABLE_AT_MERGE",
+                                   "PR не mergeable непосредственно перед merge")
         audit.record("github.merge.before", f"pr=#{pr_number} head={expected_head[:12]}",
                      correlation_id=correlation_id)
         res = self.forge.squash_merge(pr_number, expected_head=expected_head, message=msg,

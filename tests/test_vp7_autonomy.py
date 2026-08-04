@@ -329,6 +329,78 @@ class TestGithubAdapter(VP7Base):
         # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
         self.assertFalse(hasattr(self.ad, "squash_merge"))
 
+    # --- §1 audit: project-binding merge (unbound / caller-mismatch / RP-mismatch) ---
+    def test_merge_unbound_adapter_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        unbound = self._prod("")   # адаптер без project_id
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        with self.assertRaises(GitContractError) as cm:
+            unbound.merge_pull_request(project_id="p", review_package_id=rp, quality_report_id=qr,
+                                       pr_number=prn, expected_head=sha, grant_id=g["id"], base="main")
+        self.assertEqual(cm.exception.code, "ADAPTER_PROJECT_UNBOUND")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)
+
+    def test_merge_caller_project_mismatch_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")   # адаптер привязан к p
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        with self.assertRaises(GitContractError) as cm:
+            prod.merge_pull_request(project_id="other", review_package_id=rp, quality_report_id=qr,
+                                    pr_number=prn, expected_head=sha, grant_id=g["id"], base="main")
+        self.assertEqual(cm.exception.code, "PROJECT_MISMATCH")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)
+
+    def test_merge_rp_project_mismatch_denied(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        # RP принадлежит ДРУГОМУ проекту, чем адаптер/операция
+        rp, qr = self._persist_rp_qr(sha, "PASS", project_id="other")
+        with self.assertRaises(GitContractError) as cm:
+            prod.merge_pull_request(project_id="p", review_package_id=rp, quality_report_id=qr,
+                                    pr_number=prn, expected_head=sha, grant_id=g["id"], base="main")
+        self.assertEqual(cm.exception.code, "GRANT_DENIED")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)
+
+    def test_merge_toctou_ci_regresses_denied(self):
+        # CI зелёный на момент authorize, но становится не-GREEN перед самим squash →
+        # merge НЕ исполняется (§1 TOCTOU: перепроверяются checks+mergeability, не только head).
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+
+        orig_checks = prod.forge.checks
+        calls = {"n": 0}
+
+        def flaky_checks(head):   # первый вызов (authorize) GREEN, второй (TOCTOU) FAILING
+            calls["n"] += 1
+            return {"head_sha": head, "state": "GREEN" if calls["n"] == 1 else "FAILING"}
+
+        prod.forge.checks = flaky_checks
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.merge_pull_request(project_id="p", review_package_id=rp, quality_report_id=qr,
+                                        pr_number=prn, expected_head=sha, grant_id=g["id"], base="main")
+            self.assertEqual(cm.exception.code, "CI_NOT_GREEN_AT_MERGE")
+        finally:
+            prod.forge.checks = orig_checks
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # не смёржено
+
     # --- Fix4: реальные write-операции списывают invocation-бюджет grant ---
     def test_push_consumes_budget_and_exhaustion_blocks(self):
         from atlas_core.autonomy import create_grant, get_grant
@@ -364,10 +436,22 @@ class TestGithubAdapter(VP7Base):
         )
         with self.assertRaises(GitContractError) as cm:
             GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract(),
-                          enforce_grant=False)
+                          enforce_grant=False, project_id="p")
         self.assertEqual(cm.exception.code, "GRANT_ENFORCEMENT_REQUIRED")
-        # с enforce_grant=True (default) реальный GhForge конструируется штатно
-        GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract())
+        # с enforce_grant=True (default) + привязкой к проекту GhForge конструируется штатно
+        GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract(), project_id="p")
+
+    # --- §1 audit: production GhForge-адаптер обязан быть привязан к проекту ---
+    def test_ghforge_adapter_requires_project_binding(self):
+        from atlas_core.github_adapter import (
+            GhForge,
+            GitContract,
+            GitContractError,
+            GitHubAdapter,
+        )
+        with self.assertRaises(GitContractError) as cm:
+            GitHubAdapter(forge=GhForge("owner/repo"), contract=GitContract())  # без project_id
+        self.assertEqual(cm.exception.code, "ADAPTER_PROJECT_UNBOUND")
 
     # --- Bypass A: ВСЕ production write-категории требуют grant (не только push) ---
     def test_production_all_write_categories_require_grant(self):
@@ -627,12 +711,16 @@ class TestDeliveryPersistence(VP7Base):
         n = 6
         barrier = threading.Barrier(n)
         errors: list[Exception] = []
+        results: list[dict] = []
+        lock = threading.Lock()
 
         def worker(i):
             try:
                 barrier.wait()
-                record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
-                                head_sha=head, gate_decision="PERMIT", gate_reason=f"r{i}")
+                out = record_delivery(project_id="p", repo="a/b", base="main", branch="atlas/vp-7",
+                                      head_sha=head, gate_decision="PERMIT", gate_reason=f"r{i}")
+                with lock:
+                    results.append(out)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
@@ -644,6 +732,9 @@ class TestDeliveryPersistence(VP7Base):
         self.assertEqual(errors, [])
         rows = [d for d in list_deliveries(project_id="p") if d["head_sha"] == head]
         self.assertEqual(len(rows), 1)  # атомарный upsert → одна durable-строка
+        # Truthful семантика: ровно одно логическое создание, все возвращают тот же id.
+        self.assertEqual(sum(1 for r in results if r.get("created")), 1)
+        self.assertEqual(len({r["id"] for r in results}), 1)
 
     def test_merge_gate_preview_api_persists_delivery(self):
         from atlas_core.app import create_app

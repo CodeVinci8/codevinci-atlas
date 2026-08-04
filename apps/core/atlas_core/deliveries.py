@@ -81,16 +81,21 @@ def record_delivery(*, project_id: str, repo: str, base: str, branch: str, head_
     for attempt in range(5):  # bounded retry на кратковременный SQLite lock
         try:
             with session_scope() as s:
-                created = s.execute(select(T.id).where(T.idempotency_key == key)).first() is None
                 s.execute(upsert)
                 s.commit()
                 out = s.execute(select(T).where(T.idempotency_key == key)).scalars().first().to_dict()
+            # Truthful created/idempotent (§1 audit): НЕ из незащищённого pre-upsert
+            # SELECT, а по факту — выиграл ли наш INSERT. ON CONFLICT DO UPDATE НЕ
+            # меняет id, поэтому row.id == наш сгенерированный id ⇔ строку создали мы;
+            # иначе это идемпотентное обновление уже существующей durable-строки.
+            created = out["id"] == values["id"]
             break
         except OperationalError as exc:  # database is locked — повторить
             last_exc = exc
             time.sleep(0.05 * (attempt + 1))
     else:
         raise last_exc  # noqa: RSE102
+    out["created"] = created  # честная семантика создания/идемпотентного обновления
     audit.record("github.delivery.recorded" if created else "github.delivery.updated",
                  f"repo={repo} branch={branch} head={head_sha[:12]} gate={gate_decision}",
                  actor=actor, correlation_id=correlation_id)

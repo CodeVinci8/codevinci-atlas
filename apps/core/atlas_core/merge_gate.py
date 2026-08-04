@@ -281,6 +281,9 @@ def authorize_merge_execution(*, forge, repo: str, project_id: str, review_packa
         return _deny(G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}")
     if rp.get("head_sha") != expected_head:
         return _deny(G_STALE_REVIEW, "ReviewPackage.head_sha != expected_head")
+    # RP должен относиться к тому же проекту, что и операция/grant (§1 audit).
+    if rp.get("project_id") != project_id:
+        return _deny(G_GRANT, f"ReviewPackage.project_id {rp.get('project_id')} != {project_id}")
 
     # 2. Точный QualityReport по id (НЕ latest) + привязка к RP + genuine PASS.
     qr = QualityService().get_report(quality_report_id)
