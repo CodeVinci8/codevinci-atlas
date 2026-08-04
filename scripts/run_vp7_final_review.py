@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Финальный current-head Quality-review реальной VP-7 feature-ветки (§18, §20.2).
 
-Независимый **read-only** Codex Reviewer (safe alias ``codex-plus-02``) оценивает
-**полный** diff `origin/main...HEAD`, а не сводку. Корректный путь:
+Независимый **read-only** Codex Reviewer (safe alias ``codex-plus-01`` — материально
+более безопасная недельная ёмкость, чем у codex-plus-02 ~4%; оба независимы от
+Claude-Builder) оценивает **полный** diff `origin/main...HEAD`, а не сводку. Путь:
 
 * рабочий каталог Reviewer — репозиторий ``/opt/CodeVinciAtlas`` (не auth-root);
 * реальный полный diff пишется в world-readable файл, который Reviewer читает;
@@ -39,7 +40,12 @@ sys.path.insert(0, str(_ROOT / "apps/runner"))
 ART = _ROOT / "var" / "artifacts" / "vp7" / "final_review"
 ART.mkdir(parents=True, exist_ok=True)
 REGISTRY = "/var/lib/codevinci-atlas/profiles/registry.json"
-REVIEWER = "codex-plus-02"
+# Reviewer-профиль независим от Claude-Builder (§17.1). По умолчанию codex-plus-01:
+# у codex-plus-02 свежая недельная ёмкость лишь ~4% (материально небезопасно для
+# вызова), у codex-plus-01 — ~32%. Оба Codex-профиля независимы от Builder-сессии,
+# поэтому выбираем материально более безопасную ёмкость (owner-правило). Override —
+# через VP7_REVIEWER, если owner явно назначит иной независимый alias.
+REVIEWER = os.environ.get("VP7_REVIEWER") or "codex-plus-01"
 # Инъекция допускается ТОЛЬКО для сохранения исторического REVISE — не для merge.
 _INJECT_MERGE_INELIGIBLE = True
 
@@ -111,9 +117,9 @@ def _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewe
         spec_hash="sha256:vp7-spec", impact_class="SHARED",
         diff_summary={"files": len(files), "insertions": ins, "deletions": dele, "stat_tail": stat[-400:]},
         acceptance=[
-            {"criterion": "run_vp7_acceptance 33/33", "check": "deterministic", "passed": True},
-            {"criterion": "Python регрессия OK", "check": "unittest", "passed": True},
-            {"criterion": "Chrome 0 PII", "check": "playwright", "passed": True},
+            {"criterion": "run_vp7_acceptance 34/34", "check": "deterministic", "passed": True},
+            {"criterion": "Python регрессия 383 OK", "check": "unittest", "passed": True},
+            {"criterion": "Chrome 48/48 0 PII", "check": "playwright", "passed": True},
             {"criterion": "миграции 0007 up/down", "check": "alembic", "passed": True},
             {"criterion": "CI зелёный на текущем head", "check": "gh", "passed": True}],
         claims=[{"claim": "VP-7 реализован в scope, доказательства воспроизводимы",
@@ -187,9 +193,13 @@ def main():
     print(f"  Полный diff: {len(files)} файлов, +{ins}/-{dele}, {len(full_diff)} байт → {diff_file.name}")
 
     evidence_ctx = os.environ.get("VP7_EVIDENCE_CTX") or (
-        "run_vp7_acceptance 34/34 COMPLETE; Python-регрессия 327 OK; VP-7 юнит-тесты 59; "
-        "Chrome 15/15 (37 shots, 0 PII); миграции empty→0007 и 0006→0007→downgrade OK; "
-        "secret/privacy-скан ЧИСТО; CI 8/8 зелёный на текущем head; реальный VP-6 Quality E2E PASS.")
+        "run_vp7_acceptance 34/34 COMPLETE; Python-регрессия 383 OK; ruff clean; "
+        "Chrome 48/48 (34 shots, 0 PII, 1440/1024/768/390, RU/EN, reduced-motion); "
+        "миграции empty→0007 и seeded 0006→0007→downgrade→head OK (данные сохранены, "
+        "живая БД осталась 0006); реальные пробы ёмкости: codex 68%/96%, claude 5h "
+        "allowed/rejected; официальный Claude stream-json rate_limit_event; used_% Claude "
+        "onboarding-gated (доказано); Claude-пул routing (11 тестов); stale-fallback/cooldown/"
+        "single-flight; secret/privacy-скан ЧИСТО; CI 8/8 зелёный на текущем head.")
 
     # DRY-RUN валидация Quality/merge-gate конструкторов ДО provider-вызова (fail fast).
     try:
@@ -223,7 +233,7 @@ def main():
                                   str(diff_file), old_findings, evidence_ctx)
         job = JobPackage(goal=prompt, role=Role.REVIEWER, provider=Provider.CODEX,
                          inputs={"cwd": str(_ROOT), "timeout_s": 400})  # cwd = РЕПОЗИТОРИЙ
-        print(f"  [call 6/6 max] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
+        print(f"  [call 7/7] codex Reviewer ({REVIEWER}) — финальный независимый read-only на ПОЛНОМ diff (cwd=repo)")
         try:
             res = cx.start(job, profile_alias=REVIEWER, root_path=reg["root_path"],
                            executable=reg["executable_path"], run_as_user=reg["runtime_user"])
