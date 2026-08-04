@@ -329,6 +329,81 @@ class TestGithubAdapter(VP7Base):
         # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
         self.assertFalse(hasattr(self.ad, "squash_merge"))
 
+    # --- call-7 REVISE fix (CRITICAL): base сверяется с ЖИВЫМ pr.base ---
+    def test_authoritative_base_mismatch_denies(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import authorize_merge_execution
+        sha, prn = self._open_pr()  # PR фактически base=main
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main", "production"],
+                         reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        # caller передаёт base=production (в grant есть), но живой PR идёт в main →
+        # fail-closed deny: merge не должен уйти в фактический pr.base по чужой сверке.
+        d = authorize_merge_execution(
+            forge=self.forge, repo="acme/demo", project_id="p", review_package_id=rp,
+            quality_report_id=qr, pr_number=prn, expected_head=sha, grant_id=g["id"],
+            base="production", environment="")
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "GRANT_DENIED")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # не смёржено
+
+    def test_authoritative_base_matches_live_permits(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import authorize_merge_execution
+        sha, prn = self._open_pr()
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        d = authorize_merge_execution(
+            forge=self.forge, repo="acme/demo", project_id="p", review_package_id=rp,
+            quality_report_id=qr, pr_number=prn, expected_head=sha, grant_id=g["id"],
+            base="main", environment="")
+        self.assertTrue(d.permitted)  # caller base совпал с живым pr.base
+
+    # --- call-7 REVISE fix (HIGH): gate-условия выводятся из durable RP, не True ---
+    def test_authoritative_baseline_derived_from_rp(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import authorize_merge_execution
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        sha, prn = self._open_pr()
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        # RP БЕЗ base_sha → baseline_known выводится False → deny (не безусловный True).
+        pkg = build_review_package(ReviewInputs(
+            project_id="p", run_id="r", wo_key="VP-7", vp_key="VP-7", branch="atlas/vp-7-x",
+            base_sha="", head_sha=sha, impact_class="LOCAL",
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, "PASS", "", [], run_id="r")
+        d = authorize_merge_execution(
+            forge=self.forge, repo="acme/demo", project_id="p", review_package_id=pkg["id"],
+            quality_report_id=rep["id"], pr_number=prn, expected_head=sha, grant_id=g["id"],
+            base="main", environment="")
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "BASELINE_UNKNOWN")
+
+    def test_authoritative_scope_derived_from_rp(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import authorize_merge_execution
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        sha, prn = self._open_pr()
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        # RP БЕЗ impact_class → diff_in_scope выводится False → deny.
+        pkg = build_review_package(ReviewInputs(
+            project_id="p", run_id="r", wo_key="VP-7", vp_key="VP-7", branch="atlas/vp-7-x",
+            base_sha="B", head_sha=sha, impact_class="",
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, "PASS", "", [], run_id="r")
+        d = authorize_merge_execution(
+            forge=self.forge, repo="acme/demo", project_id="p", review_package_id=pkg["id"],
+            quality_report_id=rep["id"], pr_number=prn, expected_head=sha, grant_id=g["id"],
+            base="main", environment="")
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "DIFF_OUT_OF_SCOPE")
+
     # --- §1 audit: project-binding merge (unbound / caller-mismatch / RP-mismatch) ---
     def test_merge_unbound_adapter_denied(self):
         from atlas_core.autonomy import create_grant

@@ -183,6 +183,22 @@ def evaluate_merge(req: MergeRequest, *, correlation_id: str = "") -> MergeGateD
     return MergeGateDecision(True, G_PERMITTED, next_action(G_PERMITTED), conditions)
 
 
+def _derive_gate_facts(rp: dict, qr: dict) -> tuple[bool, bool, bool]:
+    """Вывести три gate-условия из АВТОРИТЕТНЫХ durable RP/QR (call-7 REVISE fix):
+    ранее production-путь передавал их безусловно True/True/False, обходя пункты
+    3/4/10 STANDARD gate. Теперь — из фактов, fail-closed:
+
+    * ``baseline_known`` ← RP несёт непустой ``base_sha`` (baseline зафиксирован);
+    * ``diff_in_scope`` ← RP несёт непустой ``impact_class`` (diff impact-оценён/scoped);
+    * ``owner_gate_pending`` ← QR-вердикт ``OWNER_REQUIRED`` (или RP помечен pending).
+    Пустой base_sha/impact_class → соответствующее условие False → merge deny."""
+    baseline_known = bool((rp or {}).get("base_sha"))
+    diff_in_scope = bool((rp or {}).get("impact_class"))
+    owner_gate_pending = ((qr or {}).get("verdict") == "OWNER_REQUIRED"
+                          or bool((rp or {}).get("owner_gate_pending")))
+    return baseline_known, diff_in_scope, owner_gate_pending
+
+
 def evaluate_merge_authoritative(
         *, repo: str, base: str, branch: str, head_sha: str, project_id: str, grant_id: str,
         review_package_id: str, quality_report_id: str = "", environment: str = "",
@@ -234,12 +250,16 @@ def evaluate_merge_authoritative(
         return _deny(G_STALE_REVIEW,
                      f"quality_report_id {quality_report_id} != последний отчёт {qr.get('id')}")
 
-    # 4. Оценить полный gate по АВТОРИТЕТНЫМ RP/QR из хранилища.
+    # 4. Три gate-условия — из АВТОРИТЕТНЫХ RP/QR (call-7 fix), не безусловные True.
+    #    Caller-параметры лишь ужесточают (AND): бэкдор «всё True» закрыт.
+    d_baseline, d_scope, d_owner = _derive_gate_facts(rp, qr)
     return evaluate_merge(MergeRequest(
         repo=repo, base=base, branch=branch, head_sha=head_sha, project_id=project_id,
         grant_id=grant_id, environment=environment, review_package=rp, quality_report=qr,
-        checks=checks or {}, mergeability=mergeability or {}, baseline_known=baseline_known,
-        diff_in_scope=diff_in_scope, owner_gate_pending=owner_gate_pending,
+        checks=checks or {}, mergeability=mergeability or {},
+        baseline_known=baseline_known and d_baseline,
+        diff_in_scope=diff_in_scope and d_scope,
+        owner_gate_pending=owner_gate_pending or d_owner,
         pr_number=pr_number), correlation_id=correlation_id)
 
 
@@ -302,13 +322,22 @@ def authorize_merge_execution(*, forge, repo: str, project_id: str, review_packa
         return _deny(G_NOT_MERGEABLE, f"PR #{pr_number} не найден/не OPEN")
     if pr.head_sha != expected_head:
         return _deny(G_STALE_REVIEW, f"живой PR head {pr.head_sha[:12]} != expected {expected_head[:12]}")
+    # call-7 CRITICAL fix: база берётся ИСКЛЮЧИТЕЛЬНО из живого pr.base. Если caller
+    # передал base, он ОБЯЗАН совпасть с живым pr.base — иначе fail-closed: иначе
+    # grant валидировался бы против caller-base, а squash_merge слил бы фактический
+    # pr.base (потенциально неразрешённую ветку).
+    live_base = pr.base
+    if base and base != live_base:
+        return _deny(G_GRANT, f"caller base '{base}' != живой pr.base '{live_base}'")
     live_checks = forge.checks(expected_head)
     live_merge = forge.mergeability(pr_number)
 
-    # 4. Полный 11-условный gate по авторитетным RP/QR + ЖИВЫМ checks/mergeability.
+    # 4. Полный 11-условный gate по авторитетным RP/QR + ЖИВЫМ checks/mergeability/base.
+    #    Три условия (baseline/scope/owner-gate) выводятся из durable RP/QR, не True.
+    d_baseline, d_scope, d_owner = _derive_gate_facts(rp, qr)
     return evaluate_merge(MergeRequest(
-        repo=repo, base=base or pr.base, branch=pr.head_branch, head_sha=expected_head,
+        repo=repo, base=live_base, branch=pr.head_branch, head_sha=expected_head,
         project_id=project_id, grant_id=grant_id, environment=environment,
         review_package=rp, quality_report=qr, checks=live_checks, mergeability=live_merge,
-        baseline_known=True, diff_in_scope=True, owner_gate_pending=False,
+        baseline_known=d_baseline, diff_in_scope=d_scope, owner_gate_pending=d_owner,
         pr_number=pr_number), correlation_id=correlation_id)

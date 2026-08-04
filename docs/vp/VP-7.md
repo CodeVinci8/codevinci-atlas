@@ -145,6 +145,29 @@ VP-7-ветке и PR** Atlas. Это разделение evidence фиксир
    Изолированные тесты миграций теперь обязаны задавать временный `ATLAS_DATA_DIR`
    и печатать доказательство иного пути БД.
 
+## Финальный Reviewer (call 7/7) — genuine REVISE + remediation
+
+Единственный авторизованный финальный вызов независимого Reviewer (codex-plus-01,
+read-only, на полном diff `origin/main...HEAD` head `4517ebd`) вернул **genuine
+REVISE** (accounting **7/7**) с двумя реальными находками в `merge_gate.py`:
+
+1. **Критично** — `authorize_merge_execution` брал `base = base or pr.base`:
+   grant проверялся против caller-base, а `squash_merge` слил бы фактический
+   `pr.base` (возможно неразрешённую ветку). **Fix:** база берётся исключительно
+   из живого `pr.base`; несовпадение caller-base ≠ живой `pr.base` → fail-closed deny.
+2. **Высокий** — production-путь передавал `baseline_known/diff_in_scope/
+   owner_gate_pending` безусловно (True/True/False), обходя 3 из 11 условий gate.
+   **Fix:** значения выводятся из durable RP/QR (`_derive_gate_facts`: `base_sha`,
+   `impact_class`, QR-вердикт); пустые → соответствующее условие False → deny.
+
+Обе находки исправлены с тестами (`test_authoritative_base_mismatch_denies`,
+`…_base_matches_live_permits`, `…_baseline_derived_from_rp`, `…_scope_derived_from_rp`).
+**Merge НЕ исполнялся** (gate отклонил, `merge_executed=false`); PASS не фабриковался.
+Согласно owner-правилу genuine REVISE — легитимный блокер: VP-7 **не закрыт** этой
+сессией. Правка **не проверена** (единственный авторизованный вызов Reviewer
+израсходован). NEXT: owner авторизует новый Reviewer-вызов по исправленному head;
+при genuine PASS — merge/backup/миграция/deploy/truth-sync.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)
