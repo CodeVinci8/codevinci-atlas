@@ -403,12 +403,29 @@ class TestClaudeProbe(CapBase):
                   '"resetsAt":1785873000,"rateLimitType":"five_hour"},"session_id":"s"}\n'
                   '{"is_error":false,"result":"ok","type":"result"}\n')
         exe = self._fake_claude('{"loggedIn": true, "subscriptionType": "pro"}', stream)
-        res = probe_claude_capacity("/tmp", executable=exe, run_as_user=None, start_window=True)
+        # timeout=2 → status-line проба быстро исчерпывает дедлайн (fake exe не
+        # интерактивен) и падает в rate_limit_event fallback.
+        res = probe_claude_capacity("/tmp", executable=exe, run_as_user=None,
+                                    start_window=True, timeout=2.0)
         os.unlink(exe)
-        self.assertEqual(res["source"], "claude-stream-json")
+        self.assertEqual(res["source"], "claude-stream-json")  # fallback
         self.assertEqual(len(res["windows"]), 1)
         self.assertEqual(res["windows"][0]["status"], "allowed")
-        self.assertEqual(res["error_code"], "")
+        self.assertEqual(res["error_code"], "")  # fallback успешен → без диагностики
+
+    def test_statusline_numeric_preferred(self):
+        # Числовой status-line (rate_limits) предпочтительнее rate_limit_event.
+        import json as _j
+
+        from atlas_core.capacity import _statusline_from_spool
+        spool = _j.dumps({"rate_limits": {
+            "five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+            "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}})
+        wins = {w["id"]: w for w in _statusline_from_spool(spool)}
+        self.assertEqual(wins["5h"]["used_pct"], 23.5)
+        self.assertEqual(wins["5h"]["remaining_pct"], 76.5)   # 100 - 23.5
+        self.assertEqual(wins["7d"]["used_pct"], 41.2)
+        self.assertEqual(wins["5h"]["status"], "allowed")
 
     def test_not_authenticated(self):
         from atlas_core.capacity import probe_claude_capacity

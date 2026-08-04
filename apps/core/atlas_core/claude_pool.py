@@ -24,8 +24,29 @@ from dataclasses import dataclass
 from . import audit
 from .router import Candidate, ReasonCode, RouterDecision, route_profile
 
-CLAUDE_POOL = ("claude-pro-01", "claude-pro-02")
 _PROVIDER = "claude"
+# Состояния, при которых профиль НЕ входит в активный Builder-пул (durable).
+_INACTIVE_STATES = frozenset({"DISABLED", "RETIRED", "UNCONFIGURED"})
+
+
+def _is_pool_member(p: dict) -> bool:
+    """Профиль входит в активный Claude Builder-пул, если он claude-провайдера,
+    enabled, schedulable и не в неактивном состоянии. Открытие пула — durable
+    registry-driven (agent_profiles), а НЕ по хардкодному списку алиасов: добавление/
+    отключение профиля меняет пул без правок кода (VP-8: attach нового профиля)."""
+    if p.get("provider") != _PROVIDER:
+        return False
+    if p.get("enabled") is False or p.get("schedulable") is False:
+        return False
+    return p.get("state") not in _INACTIVE_STATES
+
+
+def claude_pool_aliases(profiles: list[dict] | None = None) -> list[str]:
+    """Durable список алиасов активного Claude Builder-пула (registry-driven)."""
+    if profiles is None:
+        from .agent_registry import ProfileService
+        profiles = ProfileService().list_profiles()
+    return sorted(p["alias"] for p in profiles if _is_pool_member(p))
 
 
 def _remaining_min(cap: dict) -> float | None:
@@ -59,7 +80,7 @@ class PoolMember:
 def _members_from_profiles(profiles: list[dict]) -> list[PoolMember]:
     out: list[PoolMember] = []
     for p in profiles:
-        if p.get("provider") != _PROVIDER or p.get("alias") not in CLAUDE_POOL:
+        if not _is_pool_member(p):  # registry-driven: enabled+schedulable+active
             continue
         cap = p.get("capacity") or {}
         out.append(PoolMember(
@@ -195,7 +216,7 @@ def _active_claude_alias() -> str:
                          .where(RunLease.released_at == "")).all()
         for pid, _role in rows:
             prof = s.get(AgentProfile, pid)
-            if prof and prof.alias in CLAUDE_POOL:
+            if prof and prof.provider == _PROVIDER:
                 return prof.alias
     return ""
 
@@ -219,5 +240,5 @@ def pool_summary_live() -> dict:
 
 
 # Экспорт для тестов/интеграции.
-__all__ = ["CLAUDE_POOL", "select_builder", "reviewer_independent", "handle_rate_limit",
+__all__ = ["claude_pool_aliases", "select_builder", "reviewer_independent", "handle_rate_limit",
            "pool_summary", "pool_summary_live", "ReasonCode"]

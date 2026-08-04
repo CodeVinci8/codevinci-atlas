@@ -37,8 +37,29 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "apps/core"))
 sys.path.insert(0, str(_ROOT / "apps/runner"))
 
-ART = _ROOT / "var" / "artifacts" / "vp7" / "final_review"
+ART_BASE = _ROOT / "var" / "artifacts" / "vp7" / "final_review"
+ART_BASE.mkdir(parents=True, exist_ok=True)
+# Call-scoped артефакты: каждый Reviewer-вызов пишет в call-<N>/, поэтому call-8 НЕ
+# перезаписывает immutable call-7. Номер вызова — явный, auditable (VP7_REVIEW_CALL).
+REVIEW_CALL = os.environ.get("VP7_REVIEW_CALL", "8")
+ART = ART_BASE / f"call-{REVIEW_CALL}"
 ART.mkdir(parents=True, exist_ok=True)
+
+
+def _preserve_call7() -> None:
+    """Одноразово снять immutable снимок исторического call-7 (верхнеуровневые
+    файлы final_review/*.json) в call-7/, если ещё не сохранён. call-7 = REVISE."""
+    dst = ART_BASE / "call-7"
+    if dst.exists():
+        return
+    import shutil
+    top = [ART_BASE / n for n in ("final_review.json", "reviewer_raw.json", "manifest_sha256.json")]
+    if all(p.exists() for p in top):
+        dst.mkdir(parents=True, exist_ok=True)
+        for p in top:
+            shutil.copy2(p, dst / p.name)
+
+
 REGISTRY = "/var/lib/codevinci-atlas/profiles/registry.json"
 # Reviewer-профиль независим от Claude-Builder (§17.1). По умолчанию codex-plus-01:
 # у codex-plus-02 свежая недельная ёмкость лишь ~4% (материально небезопасно для
@@ -144,7 +165,9 @@ def main():
     base = sys.argv[2] if len(sys.argv) > 2 else "main"
     head = sys.argv[3] if len(sys.argv) > 3 else sh(["git", "-C", str(_ROOT), "rev-parse", "HEAD"]).stdout.strip()
     pr = int(sys.argv[4]) if len(sys.argv) > 4 else 13
-    print(f"=== VP-7 FINAL FULL-DIFF QUALITY REVIEW (repo={repo} base={base} head={head[:12]} pr=#{pr}) ===")
+    _preserve_call7()  # immutable снимок исторического call-7 до записи call-8
+    print(f"=== VP-7 FINAL FULL-DIFF QUALITY REVIEW call={REVIEW_CALL} "
+          f"(repo={repo} base={base} head={head[:12]} pr=#{pr}) ===")
 
     # Верификация: локальный HEAD == заявленный head (review именно текущего head).
     local_head = sh(["git", "-C", str(_ROOT), "rev-parse", "HEAD"]).stdout.strip()
@@ -233,7 +256,7 @@ def main():
                                   str(diff_file), old_findings, evidence_ctx)
         job = JobPackage(goal=prompt, role=Role.REVIEWER, provider=Provider.CODEX,
                          inputs={"cwd": str(_ROOT), "timeout_s": 400})  # cwd = РЕПОЗИТОРИЙ
-        print(f"  [call 7/7] codex Reviewer ({REVIEWER}) — финальный независимый read-only на ПОЛНОМ diff (cwd=repo)")
+        print(f"  [call {REVIEW_CALL}] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
         try:
             res = cx.start(job, profile_alias=REVIEWER, root_path=reg["root_path"],
                            executable=reg["executable_path"], run_as_user=reg["runtime_user"])

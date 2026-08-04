@@ -74,6 +74,7 @@ def unknown_capacity() -> Capacity:
 # границе. Нет числа → точный error_code, а не немой UNKNOWN.
 # =============================================================================
 import json as _json  # noqa: E402
+import os as _os  # noqa: E402
 import re as _re  # noqa: E402
 import subprocess as _sp  # noqa: E402
 import threading as _th  # noqa: E402
@@ -271,20 +272,23 @@ def probe_claude_capacity(root_path: str, *, executable: str, run_as_user: str |
     """Ёмкость Claude из ОФИЦИАЛЬНЫХ поверхностей (§11.6):
 
     * план и авторизация — ``claude auth status --json`` (без затрат подписки);
-    * окна (тип + статус + reset) — официальные ``rate_limit_event`` из
-      ``claude -p … --output-format stream-json --verbose`` (**start_window**).
+    * **числовые** окна (``used_percentage``+``resets_at``) — ОФИЦИАЛЬНЫЙ status-line
+      ``rate_limits`` (stdin JSON команде statusLine) из интерактивной сессии после
+      первого API-ответа (§3, code.claude.com/docs/en/statusline#rate-limit-usage);
+    * fallback (тип+статус+reset без %) — официальные ``rate_limit_event`` из
+      ``claude -p … --output-format stream-json --verbose``.
 
-    Замечание о числах: ``used_percentage`` в установленном Claude Code 2.1.220
-    отдаётся только через status-line ``rate_limits``, доступный лишь в
-    интерактивном REPL, который в изолированной среде закрыт первичным onboarding
-    (``hasCompletedOnboarding`` в персистентном ``.claude.json`` нельзя задать
-    session-local ``--settings``, а нажимать клавиши onboarding запрещено). Поэтому
-    честно отдаём статус окна (allowed/warning/rejected) + точный ``resets_at`` из
-    stream-json ``rate_limit_event`` — без фикции процентов.
+    Диагностированное ограничение (свежая проба v2.1.220, документированный порядок):
+    интерактивный REPL изолированного профиля с незавершённым onboarding показывает
+    экран «Select login method» → OAuth-URL ДО первого prompt. Завершение = login
+    (запрещено; блокируется safety-классификатором), а ``hasCompletedOnboarding``
+    forge запрещён. Поэтому для профиля с НЕзавершённым onboarding числа недоступны
+    → честный ``rate_limit_event`` статус. Для профиля с завершённым onboarding
+    status-line отдаёт реальные проценты — код это поддерживает без изменений.
 
-    Безопасность (§30): не читаем credentials/cookies/session; из потока берём
-    только rateLimitType/status/resetsAt; session_id/uuid/request_id/текст ответа/
-    email/org отбрасываем на границе. tools/MCP/repo отключены (``--allowedTools ''``)."""
+    Безопасность (§30): не читаем credentials/cookies/session; берём только
+    used_percentage/resets_at/rateLimitType/status; session_id/uuid/request_id/
+    email/org/prompt/response отбрасываем на границе; spool 0600, эфемерный."""
     plan, auth_ok = "", False
     try:
         argv = _base_argv(root_path, run_as_user, {"CLAUDE_CONFIG_DIR": root_path}) + \
@@ -299,16 +303,27 @@ def probe_claude_capacity(root_path: str, *, executable: str, run_as_user: str |
         return _cap_error("claude", "CLAUDE_NOT_AUTHENTICATED", "не авторизован", plan=plan)
     if not start_window:
         # «Обновить лимиты» без окна не тратит подписку: возвращаем план+auth.
-        # Числовой статус окна требует явного owner-действия «Начать окно».
         r = _cap_error("claude", "CLAUDE_NEEDS_START_WINDOW",
                        "числовой статус окна требует owner-действия «Начать окно»",
                        plan=plan, auth_ok=True)
         r["source"] = "claude-auth-status"
         return r
+    # 1. Предпочтительно — ОФИЦИАЛЬНЫЙ status-line rate_limits (реальные проценты).
+    win_num, sl_err, sl_detail = _claude_statusline_windows(root_path, executable, run_as_user,
+                                                            timeout)
+    if win_num:
+        return {"provider": "claude", "plan": plan, "auth_ok": True, "windows": win_num,
+                "source": "claude-statusline", "checked_at": _now_iso(),
+                "error_code": "", "detail": _safe(sl_detail)}
+    # 2. Fallback — официальный rate_limit_event (статус+reset без %).
     windows, err, detail = _claude_start_window(root_path, executable, run_as_user, timeout)
+    # error_code пуст, если окна получены (fallback успешен); иначе — точная причина
+    # (сначала fallback-ошибка, затем диагностика status-line).
+    ecode = "" if windows else (err or sl_err)
     return {"provider": "claude", "plan": plan, "auth_ok": True, "windows": windows,
             "source": "claude-stream-json" if windows else "claude-auth-status",
-            "checked_at": _now_iso(), "error_code": err, "detail": _safe(detail)}
+            "checked_at": _now_iso(),
+            "error_code": ecode, "detail": _safe(detail or sl_detail)}
 
 
 # Отображение официального rateLimitType → окно Atlas.
@@ -354,6 +369,143 @@ def _claude_windows_from_events(events: list[dict]) -> list[dict]:
         w["status"] = status  # allowed|warning|rejected — статус без фикции процента
         windows.append(w)
     return windows
+
+
+def _statusline_from_spool(spool_text: str) -> list[dict]:
+    """Safe-извлечение числовых окон из официального status-line JSON (rate_limits).
+    Берём ТОЛЬКО used_percentage/resets_at; всё остальное отбрасываем на границе."""
+    try:
+        d = _json.loads(spool_text)
+    except (_json.JSONDecodeError, TypeError):
+        return []
+    rl = d.get("rate_limits") if isinstance(d, dict) else None
+    if not isinstance(rl, dict):
+        return []
+    out: list[dict] = []
+    for key, (wid, label, mins) in _CLAUDE_WIN.items():
+        w = rl.get(key)
+        if not isinstance(w, dict):
+            continue
+        up = w.get("used_percentage")
+        if up is None:
+            continue
+        win = _mk_window(win_id=wid, label=label, used_pct=up,
+                         reset_at=_epoch_iso(w.get("resets_at")), window_mins=mins)
+        win["status"] = ("rejected" if up >= 100 else "warning" if up >= 80 else "allowed")
+        out.append(win)
+    return out
+
+
+def _claude_statusline_windows(root: str, exe: str, user: str | None, timeout: float):
+    """ОФИЦИАЛЬНЫЙ числовой сбор ёмкости через status-line ``rate_limits`` (§3):
+    эфемерный ``--settings`` со statusLine-командой → spool 0600; интерактивная
+    сессия; после первого API-ответа Claude Code вызывает statusLine и передаёт
+    ``rate_limits`` на stdin команды; мы читаем spool и берём только used%/resets.
+
+    Безопасно и fail-closed: НИКОГДА не навигируем login/terms (owner-запрет +
+    safety-классификатор). Экран onboarding/login → немедленный abort с точным
+    диагностическим кодом. Сообщение отправляем ТОЛЬКО достигнув ready-prompt без
+    onboarding-маркеров. Гарантированный kill-server и удаление эфемерных файлов."""
+    import shutil
+    import tempfile
+    import uuid
+    tmux = shutil.which("tmux")
+    if not tmux:
+        return [], "CLAUDE_TMUX_ABSENT", "tmux недоступен для status-line пробы"
+    work = tempfile.mkdtemp(prefix="atlas-sl-")
+    spool = _os.path.join(work, "rate.json")
+    sl = _os.path.join(work, "sl.sh")
+    settings = _os.path.join(work, "settings.json")
+    sock = _os.path.join(work, "t.sock")
+    session = "atlas-sl-" + uuid.uuid4().hex[:8]
+    try:
+        # statusLine-скрипт: сбрасывает stdin JSON в spool (0600), печатает метку.
+        with open(sl, "w") as f:
+            f.write('#!/bin/bash\numask 077\ncat > "%s.tmp"\nmv -f "%s.tmp" "%s"\necho atlas\n'
+                    % (spool, spool, spool))
+        _os.chmod(sl, 0o755)
+        with open(settings, "w") as f:
+            _json.dump({"statusLine": {"type": "command", "command": sl}, "theme": "dark",
+                        "includeCoAuthoredBy": False}, f)
+        if user:
+            _sp.run(["chown", "-R", f"{user}:{user}", work], capture_output=True, timeout=10)
+            _os.chmod(work, 0o750)
+        env = {"HOME": root, "CLAUDE_CONFIG_DIR": root, "PATH": f"/usr/bin:/bin:{root}/.local/bin",
+               "TERM": "xterm-256color", "LANG": "C.UTF-8", "SHELL": "/bin/bash"}
+        envargs = [f"{k}={v}" for k, v in env.items()]
+        runner = ["runuser", "-u", user, "--"] if user else []
+
+        def tmux_cmd(*args, to: float = 8.0):
+            return _sp.run([*runner, "env", "-i", *envargs, tmux, "-S", sock, *args],
+                           capture_output=True, text=True, timeout=to, stdin=_sp.DEVNULL)
+
+        r = tmux_cmd("new-session", "-d", "-s", session, "-x", "150", "-y", "46",
+                     "-c", root, f"{exe} --settings {settings}", to=15.0)
+        if r.returncode != 0:
+            return [], "CLAUDE_SL_SPAWN_FAILED", _safe(r.stderr or "tmux new-session")
+        # onboarding/login маркеры (fail-closed) и ready-prompt.
+        gate = ("select login method", "sign in", "paste code", "/login", "log in",
+                "accept", "terms of service", "welcome to claude")
+        ready = ("? for shortcuts", "esc to interrupt")
+        deadline = _time.monotonic() + min(14.0, timeout * 0.45)
+        at_prompt = False
+        sent = False
+        while _time.monotonic() < deadline:
+            _time.sleep(1.0)
+            if _os.path.exists(spool):
+                break
+            screen = tmux_cmd("capture-pane", "-p", "-t", session, to=6.0).stdout or ""
+            low = screen.lower()
+            if any(m in low for m in gate):
+                # Экран onboarding/login: НЕ навигируем, немедленный abort.
+                return [], "CLAUDE_STATUSLINE_ONBOARDING_GATED", \
+                    "интерактивный REPL требует login-onboarding до prompt (login запрещён)"
+            if not at_prompt and any(m in low for m in ready):
+                at_prompt = True
+            if at_prompt and not sent:
+                # Ready-prompt достигнут без onboarding → один минимальный ответ.
+                tmux_cmd("send-keys", "-t", session, "say ok", to=4.0)
+                _time.sleep(0.6)
+                tmux_cmd("send-keys", "-t", session, "Enter", to=4.0)
+                sent = True
+        # Дождаться status-line spool с rate_limits после ответа.
+        if sent:
+            udeadline = _time.monotonic() + min(24.0, timeout * 0.5)
+            while _time.monotonic() < udeadline:
+                _time.sleep(1.0)
+                if _os.path.exists(spool):
+                    try:
+                        if "rate_limits" in open(spool).read():
+                            break
+                    except OSError:
+                        pass
+        if not _os.path.exists(spool):
+            return [], "CLAUDE_STATUSLINE_NO_SPOOL", "statusLine не сработал (prompt/response не достигнут)"
+        try:
+            with open(spool) as f:
+                spool_text = f.read()
+        except OSError as exc:
+            return [], "CLAUDE_STATUSLINE_READ_FAILED", str(exc)
+        wins = _statusline_from_spool(spool_text)
+        if wins:
+            return wins, "", ""
+        return [], "CLAUDE_STATUSLINE_NO_RATE_LIMITS", "status-line без rate_limits (нет API-ответа)"
+    except _sp.TimeoutExpired:
+        return [], "CLAUDE_STATUSLINE_TIMEOUT", "status-line проба превысила лимит времени"
+    except Exception as exc:  # noqa: BLE001
+        return [], "CLAUDE_STATUSLINE_FAILED", str(exc)
+    finally:
+        try:
+            _sp.run([*(["runuser", "-u", user, "--"] if user else []), "env", "-i",
+                     f"HOME={root}", "PATH=/usr/bin:/bin", "SHELL=/bin/bash", tmux, "-S", sock,
+                     "kill-server"], capture_output=True, timeout=8)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import shutil as _sh
+            _sh.rmtree(work, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _claude_start_window(root: str, exe: str, user: str | None, timeout: float):

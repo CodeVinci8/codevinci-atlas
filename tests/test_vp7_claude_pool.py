@@ -25,8 +25,9 @@ class PoolBase(AtlasTestCase):
 
 
 def _prof(alias, state="READY", cap_status="AVAILABLE", stale=False, windows=None,
-          observed_at="2026-08-04T00:00:00+00:00"):
+          observed_at="2026-08-04T00:00:00+00:00", enabled=True, schedulable=True):
     return {"id": "id-" + alias, "alias": alias, "provider": "claude", "state": state,
+            "enabled": enabled, "schedulable": schedulable,
             "capacity": {"status": cap_status, "stale": stale, "observed_at": observed_at,
                          "windows": windows or []}}
 
@@ -108,6 +109,58 @@ class TestPoolSelection(PoolBase):
         d = select_builder(profiles)
         self.assertFalse(d.ok)
         self.assertEqual(d.reason_code, "NO_ELIGIBLE_PROFILE")  # без silent fallback
+
+
+class TestRegistryDrivenPool(PoolBase):
+    def test_disabled_profile_excluded_from_pool(self):
+        from atlas_core.claude_pool import claude_pool_aliases, select_builder
+        profiles = [_prof("claude-pro-01", cap_status="AVAILABLE"),
+                    _prof("claude-pro-02", cap_status="AVAILABLE",
+                          enabled=False, schedulable=False, state="DISABLED")]
+        # registry-driven открытие: только активный профиль в пуле.
+        self.assertEqual(claude_pool_aliases(profiles), ["claude-pro-01"])
+        d = select_builder(profiles)
+        self.assertEqual(d.effective_profile, "claude-pro-01")  # disabled не выбирается
+
+    def test_single_active_profile_selected(self):
+        from atlas_core.claude_pool import claude_pool_aliases, pool_summary
+        profiles = [_prof("claude-pro-01", cap_status="AVAILABLE"),
+                    _prof("claude-pro-02", enabled=False, schedulable=False, state="DISABLED")]
+        self.assertEqual(claude_pool_aliases(profiles), ["claude-pro-01"])
+        summ = pool_summary(profiles)
+        self.assertEqual(summ["members"], ["claude-pro-01"])   # pro-02 не член
+        self.assertEqual(summ["authorized_count"], 1)
+        self.assertNotIn("claude-pro-02", summ["members"])     # исключён из UI-сводки
+
+    def test_new_profile_added_without_code_change(self):
+        # VP-8 attach: новый eligible профиль просто появляется в реестре → в пуле.
+        from atlas_core.claude_pool import claude_pool_aliases
+        profiles = [_prof("claude-pro-01"), _prof("claude-pro-03")]  # без правок кода
+        self.assertEqual(claude_pool_aliases(profiles), ["claude-pro-01", "claude-pro-03"])
+
+
+class TestSingleProfileRateLimit(PoolBase):
+    def setUp(self):
+        super().setUp()
+        from atlas_core.agent_registry import ProfileService
+        self.svc = ProfileService()
+        pid = self.svc.upsert_profile("claude-pro-01", "claude", unix_label="u")
+        self.svc.set_state(pid, "READY", expected_version=1)
+        # единственный активный Claude; pro-02 disabled
+        pid2 = self.svc.upsert_profile("claude-pro-02", "claude", unix_label="u",
+                                       enabled=False, schedulable=False)
+        self.svc.set_state(pid2, "AUTH_REQUIRED", expected_version=1)
+
+    def test_single_profile_ratelimit_no_handoff(self):
+        from atlas_core.claude_pool import handle_rate_limit
+        # единственный активный профиль исчерпан → нет альтернативы → no handoff,
+        # retry запрещён (Run уходит в owner-action; без retry-loop/фейкового handoff).
+        r = handle_rate_limit(self.svc.list_profiles(), alias="claude-pro-01",
+                              rate_limit_type="five_hour", resets_at_epoch=1785871800)
+        self.assertEqual(r["exhausted_alias"], "claude-pro-01")
+        self.assertFalse(r["ok"])
+        self.assertFalse(r["retry_allowed"])
+        self.assertEqual(r["next_effective"], "")
 
 
 class TestReviewerIndependence(PoolBase):

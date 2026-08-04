@@ -38,14 +38,18 @@ def seed(data_dir: str) -> None:
     os.environ["ATLAS_DATA_DIR"] = data_dir
     reg = Path(data_dir) / "profiles" / "registry.json"
     reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text(json.dumps({"profiles": {
-        a: {"alias": a, "provider": p, "root_path": f"/x/{a}", "state": "AUTH_REQUIRED",
-            "runtime_user": u}
-        for a, p, u in (("codex-plus-01", "codex", "atlas-cx01"),
-                        ("codex-plus-02", "codex", "atlas-cx02"),
-                        ("claude-pro-01", "claude", "atlas-cl01"),
-                        ("claude-pro-02", "claude", "atlas-cl02"))}},
-        ensure_ascii=False), encoding="utf-8")
+    # Текущая правда: два Codex + ОДИН активный Claude (claude-pro-01).
+    # claude-pro-02 — истёкшая вторая подписка: disabled (не в активном пуле/UI/ёмкости),
+    # исторические ссылки сохраняются. Новый второй Claude привяжут в VP-8.
+    profs = {}
+    for a, p, u, dis in (("codex-plus-01", "codex", "atlas-cx01", False),
+                         ("codex-plus-02", "codex", "atlas-cx02", False),
+                         ("claude-pro-01", "claude", "atlas-cl01", False),
+                         ("claude-pro-02", "claude", "atlas-cl02", True)):
+        profs[a] = {"alias": a, "provider": p, "root_path": f"/x/{a}",
+                    "state": "DISABLED" if dis else "AUTH_REQUIRED", "runtime_user": u,
+                    "disabled": dis}
+    reg.write_text(json.dumps({"profiles": profs}, ensure_ascii=False), encoding="utf-8")
 
     venv = _ROOT / ".venv" / "bin"
     subprocess.run([str(venv / "alembic"), "upgrade", "head"], cwd=str(_ROOT), check=True,
@@ -72,6 +76,7 @@ def seed(data_dir: str) -> None:
     reconcile_profiles(ProfileRegistry(str(reg)), actor="chrome-fixture")
 
     def prober(prof):
+        # claude-pro-02 disabled (истёкшая подписка) — остаётся DISABLED (не синкается).
         m = {"codex-plus-01": {"authenticated": True, "state": "READY"},
              "codex-plus-02": {"authenticated": True, "state": "READY"},
              "claude-pro-01": {"authenticated": True, "state": "READY"},
@@ -79,25 +84,21 @@ def seed(data_dir: str) -> None:
         return {"cli_version": "fixture 1.0", "auth": m[prof.alias]}
     run_auth_health(registry=ProfileRegistry(str(reg)), prober=prober, actor="chrome-fixture")
 
-    # --- VP-7 capacity observations: реальные значения последней пробы ---------
-    # Codex — числовые окна (68% / 96% LOW); Claude — status-окна rate_limit_event
-    # (allowed / rejected). Плюс демонстрация STALE-fallback на codex-plus-02.
+    # --- VP-7 capacity observations ------------------------------------------
+    # Codex — числовые окна (68% / 96% LOW + STALE-fallback). Claude — ОДИН активный
+    # профиль claude-pro-01 с ЧИСЛОВЫМИ окнами (source=claude-statusline: демонстрация
+    # официального numeric-UI). claude-pro-02 disabled → БЕЗ ёмкости (не в активном UI).
     from atlas_core.capacity import persist_capacity
     from atlas_core.claude_pool import select_builder
     ids = {p["alias"]: p["id"] for p in ProfileService().list_profiles()}
     reset7d = (_now() + timedelta(days=4)).isoformat()
-    reset5h_ok = (_now() + timedelta(hours=2)).isoformat()
-    reset5h_bad = (_now() + timedelta(hours=1)).isoformat()
+    reset5h = (_now() + timedelta(hours=2)).isoformat()
 
     def _num_win(wid, used, reset, mins):
         return {"id": wid, "label": {"5h": "Сессия (5 ч)", "7d": "Неделя (7 дн)"}[wid],
                 "used_pct": used, "remaining_pct": round(100 - used, 1), "reset_at": reset,
-                "window_mins": mins}
-
-    def _stat_win(wid, status, reset, mins):
-        return {"id": wid, "label": {"5h": "Сессия (5 ч)", "7d": "Неделя (7 дн)"}[wid],
-                "used_pct": (100.0 if status == "rejected" else None),
-                "remaining_pct": None, "reset_at": reset, "window_mins": mins, "status": status}
+                "window_mins": mins,
+                "status": ("rejected" if used >= 100 else "warning" if used >= 80 else "allowed")}
 
     persist_capacity(ids["codex-plus-01"], {"provider": "codex", "plan": "plus", "auth_ok": True,
         "source": "codex-app-server", "error_code": "", "windows": [_num_win("7d", 68.0, reset7d, 10080)]})
@@ -106,19 +107,18 @@ def seed(data_dir: str) -> None:
         "source": "codex-app-server", "error_code": "", "windows": [_num_win("7d", 96.0, reset7d, 10080)]})
     persist_capacity(ids["codex-plus-02"], {"provider": "codex", "plan": "plus", "auth_ok": True,
         "source": "codex-probe", "error_code": "CODEX_APPSERVER_IO_FAILED", "windows": []})
+    # claude-pro-01: официальные числовые окна из status-line (used_percentage).
     persist_capacity(ids["claude-pro-01"], {"provider": "claude", "plan": "pro", "auth_ok": True,
-        "source": "claude-stream-json", "error_code": "",
-        "windows": [_stat_win("5h", "rejected", reset5h_bad, 300)]})
-    persist_capacity(ids["claude-pro-02"], {"provider": "claude", "plan": "pro", "auth_ok": True,
-        "source": "claude-stream-json", "error_code": "",
-        "windows": [_stat_win("5h", "allowed", reset5h_ok, 300)]})
+        "source": "claude-statusline", "error_code": "",
+        "windows": [_num_win("5h", 23.5, reset5h, 300), _num_win("7d", 41.2, reset7d, 10080)]})
+    # claude-pro-02 disabled → ёмкость НЕ наблюдается (исключён из активного пула).
 
-    # Активный Claude Builder (claude-pro-02) + запись причины роутинга (для pool summary).
+    # Активный Claude Builder = единственный активный профиль claude-pro-01.
     from atlas_core.ids import new_id
     from atlas_core.orm import RunLease
     with session_scope() as db:
         db.add(RunLease(id=new_id("rl"), run_id="run_ok", role="builder",
-                        profile_id=ids["claude-pro-02"], worktree="wt-vp7", holder="core",
+                        profile_id=ids["claude-pro-01"], worktree="wt-vp7", holder="core",
                         acquired_at=_now().isoformat()))
         db.commit()
     select_builder(ProfileService().list_profiles(), actor="chrome-fixture")
