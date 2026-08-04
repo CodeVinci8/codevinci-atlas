@@ -150,8 +150,23 @@ def upgrade() -> None:
     op.add_column("profile_health",
                   sa.Column("source", sa.String(length=40), nullable=False, server_default=""))
 
+    # --- capacity_observations: подтверждённый план + полные окна + error_code (VP-7) ---
+    op.add_column("capacity_observations",
+                  sa.Column("plan", sa.String(length=40), nullable=False, server_default=""))
+    op.add_column("capacity_observations",
+                  sa.Column("five_h_reset_at", sa.DateTime(), nullable=True))
+    op.add_column("capacity_observations",
+                  sa.Column("seven_d_reset_at", sa.DateTime(), nullable=True))
+    op.add_column("capacity_observations",
+                  sa.Column("error_code", sa.String(length=60), nullable=False, server_default=""))
+    op.add_column("capacity_observations",
+                  sa.Column("windows_json", sa.Text(), nullable=False, server_default="[]"))
+
 
 def downgrade() -> None:
+    with op.batch_alter_table("capacity_observations") as b:
+        for col in ("windows_json", "error_code", "seven_d_reset_at", "five_h_reset_at", "plan"):
+            b.drop_column(col)
     with op.batch_alter_table("profile_health") as b:
         b.drop_column("source")
     for idx in ("ix_github_deliveries_created_at", "ux_github_deliveries_idempotency_key",

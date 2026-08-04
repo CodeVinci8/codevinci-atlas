@@ -73,6 +73,20 @@ def auth_health_report() -> JSONResponse:
     return JSONResponse({"auth_health": _report()})
 
 
+@router.post("/profiles/capacity/refresh")
+def refresh_capacity(alias: str | None = Query(None)) -> JSONResponse:
+    """Ручной bounded refresh числовых лимитов (§11.6): пробит официальные CLI-
+    источники (Codex app-server / Claude usage) под рантайм-пользователями и
+    персистит нормализованные наблюдения. Single-flight + timeouts (без polling-
+    шторма). Токены/cookie не читаются; email/org — redaction на границе."""
+    from .capacity import reconcile_capacity
+    try:
+        results = reconcile_capacity(aliases=[alias] if alias else None, force=True)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+    return JSONResponse({"refreshed": results})
+
+
 @router.get("/models")
 def list_models(provider: str | None = Query(None)) -> JSONResponse:
     return JSONResponse({"models": _models.list_models(provider=provider)})

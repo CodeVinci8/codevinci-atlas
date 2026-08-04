@@ -743,8 +743,17 @@ class CapacityObservation(Base):
     confidence: Mapped[str] = mapped_column(String(20), default="unknown")
     stale: Mapped[bool] = mapped_column(Boolean, default=False)
     observed_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+    # VP-7 numeric-limits (§11.6): подтверждённый план и полные окна из официального
+    # источника (Codex app-server / Claude usage). error_code — точная причина, если
+    # число недоступно, вместо немого UNKNOWN.
+    plan: Mapped[str] = mapped_column(String(40), default="")
+    five_h_reset_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    seven_d_reset_at: Mapped[datetime | None] = mapped_column(default=None, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(60), default="")
+    windows_json: Mapped[str] = mapped_column(Text, default="[]")  # [{id,label,used_pct,remaining_pct,reset_at,window_mins}]
 
     def to_dict(self) -> dict:
+        import json as _json
         return {
             "profile_id": self.profile_id, "status": self.status,
             "five_h_used_pct": self.five_h_used_pct,
@@ -752,6 +761,11 @@ class CapacityObservation(Base):
             "reset_at": _iso_opt(self.reset_at), "source": self.source,
             "confidence": self.confidence, "stale": self.stale,
             "observed_at": _iso(self.observed_at),
+            "plan": self.plan,
+            "five_h_reset_at": _iso_opt(self.five_h_reset_at),
+            "seven_d_reset_at": _iso_opt(self.seven_d_reset_at),
+            "error_code": self.error_code,
+            "windows": _json.loads(self.windows_json or "[]"),
         }
 
 
