@@ -120,6 +120,29 @@ class TestAutonomyGrants(VP7Base):
         g = self._grant()  # starts_at = now (в прошлом к моменту evaluate)
         self.assertTrue(evaluate("commit", grant_id=g["id"]).permitted)
 
+    # --- call-10 fix (finding 1): consume_budget атомарно ре-валидирует grant ---
+    def test_consume_budget_rejects_revoked_grant(self):
+        from atlas_core.autonomy import ConflictError, consume_budget, revoke_grant
+        g = self._grant()
+        revoke_grant(g["id"], by="owner", reason="revoked mid-flight")
+        with self.assertRaises(ConflictError):        # revoked → не списывается
+            consume_budget(g["id"], n=1, expected_version=g["version"])
+
+    def test_consume_budget_rejects_future_starts_at(self):
+        from datetime import datetime, timedelta, timezone
+
+        from atlas_core.autonomy import ConflictError, consume_budget
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Grant
+        g = self._grant()
+        with session_scope() as s:
+            row = s.get(Grant, g["id"])
+            row.starts_at = datetime.now(timezone.utc) + timedelta(hours=1)
+            s.commit()
+            ver = row.version
+        with self.assertRaises(ConflictError):        # ещё не активен → не списывается
+            consume_budget(g["id"], n=1, expected_version=ver)
+
     # --- Fix2: пустой scope НЕ означает «любой repo» (fail-closed) ---
     def test_empty_scope_repo_capability_denies(self):
         from atlas_core.autonomy import evaluate
@@ -350,6 +373,68 @@ class TestGithubAdapter(VP7Base):
     def test_no_public_raw_squash_merge_on_adapter(self):
         # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
         self.assertFalse(hasattr(self.ad, "squash_merge"))
+
+    # --- call-10 fix (finding 4): Emergency Stop закрывает write/merge boundary ---
+    def test_emergency_blocks_write_and_merge(self):
+        from atlas_core import emergency
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD",
+                         capabilities=["commit", "merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        emergency.engage(reason="stop", actor="owner")
+        try:
+            with self.assertRaises(GitContractError) as c1:      # commit заблокирован
+                prod.commit(self.wc, "VP-7: x", grant_id=g["id"])
+            self.assertEqual(c1.exception.code, "EMERGENCY_STOP")
+            with self.assertRaises(GitContractError) as c2:      # merge заблокирован
+                prod.merge_pull_request(project_id="p", review_package_id=rp,
+                                        quality_report_id=qr, pr_number=prn, expected_head=sha,
+                                        grant_id=g["id"], base="main")
+            self.assertEqual(c2.exception.code, "EMERGENCY_STOP")
+            self.assertEqual(self.forge.branch_head("main"), self.seed)  # не смёржено
+        finally:
+            emergency.resume(actor="owner")
+
+    # --- call-10 fix (finding 2): строгие checks/mergeability (GhForge) ---
+    def test_ghforge_checks_and_mergeability_strict(self):
+        from atlas_core.github_adapter import GhForge
+
+        class FakeGh(GhForge):
+            def __init__(self, runs, merge_json):
+                self.repo = "a/b"
+                self._runs = runs
+                self._merge = merge_json
+
+            def _gh(self, *args, **kw):
+                import json as _j
+
+                class R:
+                    returncode = 0
+                out = R()
+                out.stdout = _j.dumps(self._runs) if "check-runs" in " ".join(args) \
+                    else _j.dumps(self._merge)
+                out.stderr = ""
+                return out
+
+        # neutral-only completed runs → НЕ GREEN (нет success).
+        f1 = FakeGh([{"name": "x", "status": "completed", "conclusion": "neutral"}], {})
+        self.assertEqual(f1.checks("h")["state"], "FAILING")
+        # failure среди runs → FAILING.
+        f2 = FakeGh([{"name": "x", "status": "completed", "conclusion": "success"},
+                     {"name": "y", "status": "completed", "conclusion": "failure"}], {})
+        self.assertEqual(f2.checks("h")["state"], "FAILING")
+        # все success → GREEN.
+        f3 = FakeGh([{"name": "x", "status": "completed", "conclusion": "success"}], {})
+        self.assertEqual(f3.checks("h")["state"], "GREEN")
+        # mergeStateStatus BLOCKED → НЕ mergeable даже при mergeable=MERGEABLE/OPEN.
+        f4 = FakeGh([], {"mergeable": "MERGEABLE", "state": "OPEN", "mergeStateStatus": "BLOCKED"})
+        self.assertFalse(f4.mergeability(1)["mergeable"])
+        f5 = FakeGh([], {"mergeable": "MERGEABLE", "state": "OPEN", "mergeStateStatus": "CLEAN"})
+        self.assertTrue(f5.mergeability(1)["mergeable"])
 
     # --- call-9 fix (finding 2): реальный merge пишет durable delivery-историю ---
     def test_merge_records_authoritative_delivery(self):

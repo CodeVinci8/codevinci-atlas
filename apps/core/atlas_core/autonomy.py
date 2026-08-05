@@ -465,6 +465,21 @@ def consume_budget(grant_id: str, *, n: int = 1, expected_version: int | None = 
             raise KeyError("grant не найден")
         if expected_version is not None and row.version != expected_version:
             raise ConflictError("VERSION_CONFLICT")
+        # call-10 fix (finding 1, TOCTOU): АТОМАРНАЯ ре-валидация grant внутри той же
+        # транзакции, что и списание бюджета. Между evaluate() и consume grant мог
+        # быть отозван/просрочен/ещё-не-активен (revoke бампает version → ловится выше;
+        # временные starts_at/expires_at версию не меняют → проверяем здесь). Любое
+        # нарушение → отказ ДО декремента и до исполнения write/merge.
+        gd = row.to_dict()
+        now = _utcnow()
+        if row.state == "REVOKED" or row.revoked_at:
+            raise ConflictError("GRANT_REVOKED")
+        if row.state != "ACTIVE":
+            raise ConflictError("GRANT_INACTIVE")
+        if _is_expired(gd, now):
+            raise ConflictError("GRANT_EXPIRED")
+        if _not_yet_active(gd, now):
+            raise ConflictError("GRANT_NOT_YET_ACTIVE")
         budget = _json.loads(row.budget_json or "{}")
         max_inv = budget.get("max_invocations")
         used = budget.get("used_invocations", 0) + n

@@ -345,7 +345,16 @@ class GhForge:
             return {"head_sha": head_sha, "state": "PENDING", "runs": 0}
         if any(x.get("status") != "completed" for x in runs):
             return {"head_sha": head_sha, "state": "PENDING", "runs": len(runs)}
-        ok = all(x.get("conclusion") in ("success", "neutral", "skipped") for x in runs)
+        # call-10 fix (finding 2): строго — все завершённые check-runs должны быть
+        # ``success`` (neutral больше НЕ считается прохождением; failure/cancelled/
+        # timed_out/action_required → FAILING). Авторитетную проверку required-
+        # contexts даёт mergeStateStatus==CLEAN в mergeability() (см. §9 gate);
+        # checks() — corroborating signal без «случайного» прохождения.
+        bad = {"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}
+        if any(x.get("conclusion") in bad for x in runs):
+            return {"head_sha": head_sha, "state": "FAILING", "runs": len(runs)}
+        ok = all(x.get("conclusion") in ("success", "skipped") for x in runs) and \
+            any(x.get("conclusion") == "success" for x in runs)
         return {"head_sha": head_sha, "state": "GREEN" if ok else "FAILING", "runs": len(runs)}
 
     def mergeability(self, number: int) -> dict:
@@ -354,8 +363,14 @@ class GhForge:
         if r.returncode != 0:
             return {"mergeable": False, "state": "UNKNOWN"}
         d = json.loads(r.stdout)
-        return {"mergeable": d.get("mergeable") == "MERGEABLE" and d.get("state") == "OPEN",
-                "state": d.get("mergeStateStatus", "")}
+        # call-10 fix (finding 2): mergeable ТОЛЬКО при mergeStateStatus==CLEAN —
+        # GitHub считает CLEAN, лишь когда все REQUIRED checks зелены, ветка актуальна
+        # и нет конфликтов. BLOCKED/BEHIND/DIRTY/UNSTABLE/UNKNOWN → НЕ mergeable
+        # (закрывает «случайный успешный check при отсутствующих required»).
+        state = d.get("mergeStateStatus", "")
+        mergeable = (d.get("mergeable") == "MERGEABLE" and d.get("state") == "OPEN"
+                     and state == "CLEAN")
+        return {"mergeable": mergeable, "state": state}
 
     def squash_merge(self, number: int, *, expected_head: str, **_kw) -> dict:
         pr = self.get_pr(number)
@@ -428,6 +443,13 @@ class GitHubAdapter:
         grant → GitContractError. project_id адаптера передаётся в
         :func:`autonomy.evaluate`, поэтому grant чужого/непривязанного проекта
         отвергается (PROJECT_MISMATCH/PROJECT_UNBOUND), а не только по repo/капабилити."""
+        # call-10 fix (finding 4): Emergency Stop закрывает GitHub execution boundary
+        # для ВСЕХ write-категорий (commit/push/create_pr/merge проходят через
+        # _consume). Активный Stop → отказ до списания бюджета и до git-действия.
+        from . import emergency
+        if emergency.blocks_new_jobs():
+            raise GitContractError("EMERGENCY_STOP",
+                                   f"Emergency Stop активен: {capability} запрещён")
         if not grant_id:
             if self.enforce_grant:
                 raise GitContractError(
@@ -439,10 +461,19 @@ class GitHubAdapter:
                                 project_id=(self.project_id or None), repo=repo, base=base)
         if not dec.permitted:
             raise GitContractError(dec.reason_code, dec.next_action)
+        # call-10 fix (finding 1, TOCTOU): списание с expected_version того же grant,
+        # что прошёл evaluate — revoke/modify между evaluate и consume бампают version
+        # → VERSION_CONFLICT; consume_budget дополнительно атомарно ре-валидирует
+        # state/revoked/expiry/starts_at. Полная авторизация неотделима от списания.
+        ver = autonomy.get_grant(grant_id).get("version")
         try:
-            autonomy.consume_budget(grant_id, n=1, correlation_id=correlation_id)
+            autonomy.consume_budget(grant_id, n=1, expected_version=ver,
+                                    correlation_id=correlation_id)
         except autonomy.BudgetError as exc:
             raise GitContractError("BUDGET_EXHAUSTED", str(exc)) from exc
+        except autonomy.ConflictError as exc:
+            raise GitContractError(str(exc) or "GRANT_CONFLICT",
+                                   "grant изменился между проверкой и списанием — повторите") from exc
 
     def commit(self, worktree: str, message: str, *, allow_empty: bool = False,
                grant_id: str = "", correlation_id: str = "") -> str:
@@ -559,28 +590,50 @@ class GitHubAdapter:
         if not (self.forge.mergeability(pr_number) or {}).get("mergeable"):
             raise GitContractError("NOT_MERGEABLE_AT_MERGE",
                                    "PR не mergeable непосредственно перед merge")
+        # call-10 fix (finding 4): Emergency Stop закрывает GitHub execution boundary
+        # НЕПОСРЕДСТВЕННО перед необратимым squash (не только в первичном evaluate).
+        # engage(), начавшийся после gate/consume, останавливает merge.
+        from . import emergency
+        if emergency.blocks_new_jobs():
+            raise GitContractError("EMERGENCY_STOP",
+                                   "Emergency Stop активен: merge запрещён на execution boundary")
+        # call-10 fix (finding 3): АВТОРИТЕТНАЯ durable delivery-запись пишется ДО
+        # необратимого squash (fail-closed: если запись не удалась — merge НЕ
+        # исполняется). После merge — идемпотентное завершение до MERGED.
+        from .deliveries import record_delivery
+        live_base = (fresh.base if fresh else base) or base
+        live_branch = fresh.head_branch if fresh else ""
+        try:
+            record_delivery(
+                project_id=eff_project, repo=self._forge_repo() or "", base=live_base,
+                branch=live_branch, head_sha=expected_head, pr_number=pr_number,
+                pr_state="OPEN", checks_state="GREEN", checks_head_sha=expected_head,
+                mergeable=True, merge_state="AUTHORIZED",
+                review_package_id=review_package_id, quality_report_id=quality_report_id,
+                gate_decision="PERMIT", gate_reason=auth.reason_code, grant_id=grant_id,
+                correlation_id=correlation_id, actor="merge")
+        except Exception as exc:  # noqa: BLE001 — нет durable outbox → НЕ мержим
+            raise GitContractError("DELIVERY_RECORD_FAILED",
+                                   "не удалось durable-зафиксировать доставку до merge") from exc
         audit.record("github.merge.before", f"pr=#{pr_number} head={expected_head[:12]}",
                      correlation_id=correlation_id)
         res = self.forge.squash_merge(pr_number, expected_head=expected_head, message=msg,
                                       author_name=name or "CodeVinci", author_email=email or "")
         audit.record("github.merge.after", f"pr=#{pr_number} merged={res.get('merged')}",
                      correlation_id=correlation_id)
-        # call-9 fix (finding 2): АВТОРИТЕТНАЯ доставка попадает в durable history
-        # ИЗ реального merge-пути (не только из preview). Пишем факт merge с gate
-        # PERMIT, live-base и merge-SHA — идемпотентно по ключу repo+base+branch+head.
+        # Идемпотентное завершение до MERGED (запись PERMIT/OPEN уже durable выше →
+        # даже при сбое здесь authoritative факт доставки не теряется, восстановим).
         try:
-            from .deliveries import record_delivery
-            live_base = (fresh.base if fresh else base) or base
             record_delivery(
                 project_id=eff_project, repo=self._forge_repo() or "", base=live_base,
-                branch=(fresh.head_branch if fresh else ""), head_sha=expected_head,
-                pr_number=pr_number, pr_state="MERGED",
-                checks_state="GREEN", checks_head_sha=expected_head,
+                branch=live_branch, head_sha=expected_head, pr_number=pr_number,
+                pr_state="MERGED", checks_state="GREEN", checks_head_sha=expected_head,
                 mergeable=True, merge_state="MERGED",
                 review_package_id=review_package_id, quality_report_id=quality_report_id,
                 gate_decision="PERMIT", gate_reason=auth.reason_code, grant_id=grant_id,
                 correlation_id=correlation_id, actor="merge")
-        except Exception as exc:  # noqa: BLE001 — запись истории не должна отменять сам merge
-            audit.record("github.merge.delivery_record_failed",
-                         f"pr=#{pr_number} {type(exc).__name__}", correlation_id=correlation_id)
+        except Exception as exc:  # noqa: BLE001 — merge необратим; PERMIT-запись durable
+            audit.record("github.merge.delivery_finalize_failed",
+                         f"pr=#{pr_number} {type(exc).__name__} (durable PERMIT есть, финализация отложена)",
+                         correlation_id=correlation_id)
         return {**res, "authorization": auth.reason_code}
