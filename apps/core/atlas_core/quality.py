@@ -281,3 +281,11 @@ class QualityService:
                 QualityReport.review_package_id == review_package_id)
                 .order_by(QualityReport.created_at.desc()).limit(1)).scalars().first()
             return row.to_dict() if row else None
+
+    def get_report(self, report_id: str) -> dict | None:
+        """Точный QualityReport по id (для авторизации merge — «latest» недопустим)."""
+        if not report_id:
+            return None
+        with session_scope() as s:
+            row = s.get(QualityReport, report_id)
+            return row.to_dict() if row else None

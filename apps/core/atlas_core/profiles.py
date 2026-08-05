@@ -56,6 +56,7 @@ class Profile:
     last_error: str | None = None
     runtime_user: str | None = None  # отдельная Unix-идентичность профиля (§7.2)
     executable_path: str | None = None  # per-profile исполняемый файл CLI (§11)
+    disabled: bool = False  # owner-отключение (напр. истёкшая подписка): не в активном пуле
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
@@ -76,6 +77,7 @@ class Profile:
             "last_error": self.last_error,
             "runtime_user": self.runtime_user,  # имя пользователя — не секрет
             "executable_path": self.executable_path,  # путь к CLI — не секрет
+            "disabled": self.disabled,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -272,6 +274,7 @@ class ProfileRegistry:
             last_error=raw.get("last_error"),
             runtime_user=raw.get("runtime_user"),
             executable_path=raw.get("executable_path"),
+            disabled=bool(raw.get("disabled", False)),
             created_at=raw.get("created_at", utcnow_iso()),
             updated_at=raw.get("updated_at", utcnow_iso()),
         )

@@ -61,6 +61,20 @@ def create_run(req: CreateRunRequest,
         return _err(exc, req.correlation_id)
 
 
+@router.post("/runs/{run_id}/start")
+def start_run(run_id: str) -> JSONResponse:
+    """Производственный диспетч Builder-шага Run (§17): registry-driven выбор
+    Claude Builder из durable-реестра, одна аренda (один writer), bounded реальный
+    Builder-шаг под изолированным профилем, safe rate-limit handoff (≤1 switch).
+    Кандидаты берутся из активного пула профилей, а не из хардкода."""
+    from .runtime import start_builder_run
+    try:
+        result = start_builder_run(run_id, actor="owner")
+        return JSONResponse({"dispatch": result})
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
 @router.get("/runs/{run_id}")
 def get_run(run_id: str) -> JSONResponse:
     try:

@@ -300,6 +300,53 @@ export const api = {
   createFixWorkOrder: (id: string, body: { finding_id?: string; goal?: string }) =>
     sendJSON<{ fix_work_order: { id: string; goal: string; status: string; role: string } }>(
       `/api/v1/reviews/${id}/fix-work-order`, "POST", body),
+
+  // --- VP-7 Autonomy, GitHub & Time Machine ---
+  autonomySummary: (projectId?: string) =>
+    getJSON<AutonomySummary>(`/api/v1/autonomy/summary${projectId ? `?project_id=${projectId}` : ""}`),
+  listGrants: (projectId?: string) =>
+    getJSON<{ grants: Grant[] }>(`/api/v1/grants${projectId ? `?project_id=${projectId}` : ""}`),
+  createGrant: (body: {
+    project_id: string; mode: AutonomyMode; capabilities: string[]; environment?: string;
+    allowed_repos?: string[]; allowed_bases?: string[]; budget?: Record<string, number>;
+    reason?: string; ttl_seconds?: number | null;
+  }) => sendJSON<{ grant: Grant }>("/api/v1/grants", "POST", body),
+  revokeGrant: (id: string, expected: number, reason: string) =>
+    sendJSON<{ grant: Grant }>(`/api/v1/grants/${id}/revoke`, "POST",
+      { expected_version: expected, reason }),
+  emergencyStatus: () => getJSON<{ emergency: EmergencyState }>("/api/v1/autonomy/emergency"),
+  emergencyEngage: (reason: string) =>
+    sendJSON<{ emergency: EmergencyState }>("/api/v1/autonomy/emergency/engage", "POST", { reason }),
+  emergencyResume: () =>
+    sendJSON<{ emergency: EmergencyState }>("/api/v1/autonomy/emergency/resume", "POST", {}),
+  listDeliveries: (projectId?: string) =>
+    getJSON<{ deliveries: GithubDelivery[] }>(
+      `/api/v1/github/deliveries${projectId ? `?project_id=${projectId}` : ""}`),
+  listAtlasCheckpoints: (projectId?: string) =>
+    getJSON<{ checkpoints: Checkpoint[] }>(
+      `/api/v1/checkpoints${projectId ? `?project_id=${projectId}` : ""}`),
+  getAtlasCheckpoint: (id: string) =>
+    getJSON<{ checkpoint: Checkpoint; verified: boolean; invalid_reason: string }>(
+      `/api/v1/checkpoints/${id}`),
+  compareCheckpoints: (a: string, b: string) =>
+    getJSON<{ compare: CompareResult }>(`/api/v1/checkpoints/compare?a=${a}&b=${b}`),
+  replayPreview: (id: string, grantId: string) =>
+    sendJSON<{ preview: Record<string, unknown> }>(
+      `/api/v1/checkpoints/${id}/replay-preview`, "POST", { grant_id: grantId }),
+  rollbackPreview: (id: string, grantId: string) =>
+    sendJSON<{ preview: Record<string, unknown> }>(
+      `/api/v1/checkpoints/${id}/rollback-preview`, "POST", { grant_id: grantId }),
+  authHealthReport: () =>
+    getJSON<{ auth_health: AuthHealthRow[] }>("/api/v1/profiles/auth-health/report"),
+  refreshCapacity: (alias?: string) =>
+    sendJSON<{ refreshed: CapacityRefreshRow[]; refresh_in_progress: boolean }>(
+      `/api/v1/profiles/capacity/refresh${alias ? `?alias=${encodeURIComponent(alias)}` : ""}`,
+      "POST", {}),
+  startWindow: (alias: string) =>
+    sendJSON<{ started: CapacityRefreshRow[] }>(
+      `/api/v1/profiles/capacity/start-window?alias=${encodeURIComponent(alias)}`, "POST", {}),
+  claudePoolSummary: () =>
+    getJSON<{ claude_pool: ClaudePoolSummary }>("/api/v1/profiles/claude-pool/summary"),
 };
 
 // --- VP-5 types ------------------------------------------------------------
@@ -338,9 +385,27 @@ export interface ProviderSessionRow {
   id: string; run_id: string; role: string; provider: string;
   profile_id: string; session_id: string; status: string; started_at: string;
 }
+export interface CapacityWindow {
+  id: string; label: string; used_pct: number | null; remaining_pct: number | null;
+  reset_at: string | null; window_mins: number | null; reset_text?: string;
+  // VP-7 Claude: официальный статус окна (allowed|warning|rejected) без числа %.
+  status?: string;
+}
+export interface ClaudePoolSummary {
+  pool: string; members: string[]; authorized_count: number; eligible_count: number;
+  active_alias: string; next_reset: string | null; last_reason: string;
+  conservative_fallback: boolean;
+}
 export interface CapacityView {
   status: string; five_h_used_pct: number | null; seven_d_used_pct: number | null;
   reset_at: string | null; source: string; observed_at: string | null;
+  // VP-7 numeric limits: полные окна, план, точная причина недоступности, свежесть.
+  windows?: CapacityWindow[]; plan?: string; error_code?: string;
+  confidence?: string; stale?: boolean; data_observed_at?: string | null;
+}
+export interface CapacityRefreshRow {
+  alias: string | null; state: string; cooldown_remaining_s?: number;
+  status?: string; error_code?: string; plan?: string; source?: string;
 }
 export interface ProfileHealthView {
   auth_status: string; plan_label: string; cli_version: string;
@@ -359,9 +424,14 @@ export interface ModelRow {
   id: string; provider: string; model_id: string; alias: string; display: string;
   availability: string; source: string; confidence: string; discovered_at: string;
 }
+export interface NextAction {
+  code: string; text: string; target: string; count?: number; actionable?: boolean;
+}
 export interface SystemSummary {
   collected_at: string; atlas_version: string; db_migration: string | null;
-  cpu: { logical_cores: number | null; load_avg: number[] | null };
+  cpu: { logical_cores: number | null; load_avg: number[] | null;
+         utilization_pct: number | null; sample_window_s: number | null;
+         util_source: string; util_state: string };
   memory: { total_bytes: number | null; used_bytes: number | null };
   disk: { total_bytes: number | null; used_bytes: number | null };
   os: { os_name: string | null; os_version: string | null; kernel: string | null;
@@ -372,6 +442,57 @@ export interface SystemSummary {
   runs: { active: number | null; queued: number | null; paused: number | null;
           owner_required: number | null; status?: string };
   leases: { worktree_writers: number | null; profile_leases: number | null; status?: string };
+  next_action: NextAction;
+}
+
+// --- VP-7 Autonomy, GitHub & Time Machine ----------------------------------
+export type AutonomyMode = "GUIDED" | "STANDARD" | "AUTONOMOUS" | "TRUSTED";
+export interface CapabilityRow {
+  code: string; label: string; available_via_autonomy: boolean; separate_grant: boolean;
+}
+export interface Grant {
+  id: string; owner_ref: string; project_id: string; environment: string; mode: AutonomyMode;
+  allowed_repos: string[]; allowed_bases: string[]; workspace_allowlist: string[];
+  capabilities: string[]; branch_rules: Record<string, unknown>;
+  command_restrictions: Record<string, unknown>; budget: Record<string, number>;
+  reason: string; starts_at: string; expires_at: string | null; state: string;
+  revoked_at: string | null; revoked_by: string; revoke_reason: string;
+  actor: string; correlation_id: string; content_hash: string; version: number;
+  created_at: string; updated_at: string;
+}
+export interface EmergencyState {
+  active: boolean; since: string | null; reason: string; actor: string; action?: string;
+  interrupted_runs: string[]; released_leases: string[];
+}
+export interface AutonomySummary {
+  modes: AutonomyMode[]; capability_matrix: CapabilityRow[];
+  grants: Grant[]; active_count: number; emergency: EmergencyState;
+}
+export interface GateCondition { code: string; ok: boolean; detail: string; }
+export interface MergeGateDecision {
+  permitted: boolean; reason_code: string; next_action: string; conditions: GateCondition[];
+}
+export interface GithubDelivery {
+  id: string; project_id: string; repo: string; base: string; branch: string;
+  head_sha: string; pr_number: number | null; pr_url: string; pr_state: string;
+  checks_state: string; checks_head_sha: string; mergeable: boolean; merge_state: string;
+  gate_decision: string; gate_reason: string; created_at: string;
+}
+export interface Checkpoint {
+  id: string; project_id: string; vp_key: string; work_order_id: string; run_id: string;
+  db_revision: string; branch: string; base_sha: string; head_sha: string;
+  worktree_status: string; patch_hash: string; artifact_hashes: { path?: string; sha?: string }[];
+  profile_alias: string; model: string; effort: string; session_ids: string[];
+  grant_id: string; grant_hash: string; test_refs: { name?: string; hash?: string }[];
+  evidence_refs: string[]; handoff_ref: string; cause: string; content_hash: string; created_at: string;
+}
+export interface CompareResult {
+  a: string; b: string; any_change: boolean;
+  diffs: Record<string, { changed: boolean; a?: string; b?: string; only_a?: string[]; only_b?: string[] }>;
+}
+export interface AuthHealthRow {
+  alias: string; provider: string; auth_status: string; observed_at: string | null;
+  source: string; reason: string; cli_version?: string; stale: boolean; raw_status?: string;
 }
 
 // --- VP-4 types ------------------------------------------------------------

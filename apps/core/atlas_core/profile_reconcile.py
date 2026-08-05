@@ -80,20 +80,26 @@ def reconcile_profiles(registry: ProfileRegistry | None = None, *,
                 AgentProfile.alias == prof.alias)).first() is not None
         # Только safe-метаданные. unix_label — безопасная сервис-метка;
         # auth_root_ref — стабильный allowlist-ref (НЕ raw path).
+        # disabled в реестре (owner-отключение, напр. истёкшая подписка) → durable
+        # enabled=False/schedulable=False, переживает рестарт (не в активном пуле).
+        disabled = bool(getattr(prof, "disabled", False))
         pid = svc.upsert_profile(
             prof.alias, prof.provider,
             unix_label=prof.runtime_user or "",
             auth_root_ref=auth_root_ref(prof.provider, prof.alias),
-            schedulable=True, enabled=True,
+            schedulable=not disabled, enabled=not disabled,
         )
+        if disabled:
+            _force_disabled(pid)
         if existed:
             result.updated.append(prof.alias)
         else:
             result.created.append(prof.alias)
-            # Свежесозданный профиль: UNCONFIGURED → AUTH_REQUIRED (root есть,
-            # credentials не проверялись здесь). Не трогаем уже существующие
-            # runtime-состояния (LEASED/COOLDOWN/READY/…).
-            _promote_unconfigured(pid)
+            if not disabled:
+                # Свежесозданный профиль: UNCONFIGURED → AUTH_REQUIRED (root есть,
+                # credentials не проверялись здесь). Не трогаем уже существующие
+                # runtime-состояния (LEASED/COOLDOWN/READY/…).
+                _promote_unconfigured(pid)
         result.by_provider[prof.provider] = result.by_provider.get(prof.provider, 0) + 1
 
     result.total = len(result.created) + len(result.updated)
@@ -103,6 +109,19 @@ def reconcile_profiles(registry: ProfileRegistry | None = None, *,
                  f"total={result.total} created={len(result.created)} "
                  f"updated={len(result.updated)}", actor=actor)
     return result
+
+
+def _force_disabled(profile_id: str) -> None:
+    """Owner-отключение профиля durable: state → DISABLED (не в активном пуле).
+    В отличие от auth-sync, это явное owner-действие и форсирует состояние (кроме
+    LEASED — активную аренду не рвём; она освободится штатно)."""
+    from .orm import ProfileState as _PS
+    with session_scope() as s:
+        row = s.execute(select(_PS).where(_PS.profile_id == profile_id)).scalars().first()
+        if row is not None and row.state not in ("LEASED", "DISABLED"):
+            row.state = "DISABLED"
+            row.next_action = "Профиль отключён владельцем (истёкшая подписка); replace в VP-8."
+            s.commit()
 
 
 def _promote_unconfigured(profile_id: str) -> None:

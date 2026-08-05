@@ -10,6 +10,9 @@
   --ember: #f28a3d; --ember-strong: #ff9a4d; --ember-dim: #b5642a;
   --ok: #58bd86; --warn: #e2a84b; --danger: #e06666; --info: #5aa6e0;
   --radius: 12px; --sidebar-w: 240px;
+  /* Единый горизонтальный gutter между контентом и сайдбаром (§28): карточки
+     не касаются навигации и друг друга; безопасный отступ на мобиле. */
+  --gutter: clamp(24px, 3vw, 48px);
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -39,7 +42,8 @@ body {
 
 .skip-link {
   position: absolute; left: -999px; top: 0; z-index: 20;
-  background: var(--ember); color: #14100c; padding: 8px 14px; border-radius: 0 0 8px 0; font-weight: 600;
+  background: var(--ember); color: #14100c; padding: 12px 16px; border-radius: 0 0 8px 0;
+  font-weight: 600; min-height: 44px; display: inline-flex; align-items: center;
 }
 .skip-link:focus { left: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible,
@@ -66,7 +70,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   padding: 9px 12px; font-size: 14px; cursor: pointer; font-weight: 500;
 }
 .nav-item:hover { background: var(--surface-2); color: var(--text); }
-.nav-item .nav-ico { width: 18px; text-align: center; color: var(--faint); }
+.nav-item .nav-ico { width: 18px; height: 18px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--faint); }
+.nav-item .nav-svg { display: block; }
+.nav-item:hover .nav-ico { color: var(--text); }
 .nav-item.active {
   background: color-mix(in srgb, var(--ember) 16%, transparent);
   color: var(--ember-strong); box-shadow: inset 2px 0 0 var(--ember);
@@ -93,7 +100,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .seg-opt.active { color: #14100c; }
 .seg-opt:focus-visible { outline: 2px solid var(--ember-strong); outline-offset: 2px; }
 
-.main { padding: 26px 30px 60px; min-width: 0; }
+.main { padding: 28px var(--gutter) 60px; min-width: 0; }
 .offline-banner {
   margin-bottom: 18px; padding: 10px 14px; border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
@@ -120,11 +127,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* --- panels & cards --- */
+/* VP-7 refinement: единый вертикальный ритм (22px между секциями), чуть больше
+   воздуха внутри панелей, выразительный заголовок секции (bench: TonWave). */
 .panel, .card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 20px; margin-bottom: 18px;
+  border-radius: var(--radius); padding: 22px; margin-bottom: 22px;
 }
-.panel h2, .card h2 { font-size: 15px; margin: 0 0 14px; letter-spacing: .01em; }
+.panel h2, .card h2 {
+  font-size: 15px; margin: 0 0 16px; letter-spacing: .01em; font-weight: 650;
+}
 .sub-h { font-size: 13px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 
 /* --- next action (один явный следующий шаг) --- */
@@ -214,7 +225,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .brand { flex: 1 1 100%; }
   .nav { flex-direction: row; flex: 1; }
   .lang { margin: 0; }
-  .main { padding: 20px 16px 48px; }
+  .main { padding: 20px clamp(16px, 4vw, 24px) 48px; }
 }
 @media (max-width: 460px) {
   .page-head h1 { font-size: 20px; }
@@ -285,7 +296,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .decision-detail { font-size: 12.5px; margin: 4px 0; max-width: 620px; }
 .decision-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .reject-box { margin-top: 10px; display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border-soft); }
-.btn-sm { padding: 4px 10px; font-size: 12.5px; }
+.btn-sm { padding: 6px 12px; font-size: 12.5px; }
+/* На тач-устройствах компактные кнопки получают полноценную зону нажатия. */
+@media (pointer: coarse) { .btn-sm { min-height: 44px; } }
 
 .node-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .node-type { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); min-width: 132px; }
@@ -316,19 +329,55 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .kpi-val { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 
 /* --- VP-5: Profiles cards --- */
-.card-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.card-grid { display: grid; gap: 22px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .p-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
   transition: border-color 160ms ease;
 }
 .p-card:hover { border-color: var(--ember-dim); }
+/* Отключённый профиль: приглушён, без hover-акцента (soft removal, §2). */
+.p-card-disabled { opacity: .62; }
+.p-card-disabled:hover { border-color: var(--border); }
+.p-disabled-note { margin: 2px 0 0; }
 .p-card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .p-alias { font-weight: 600; }
 .p-prov { font-size: 12px; }
-.p-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; }
+.p-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; flex-wrap: wrap; }
 .p-row .label { color: var(--muted); font-size: 12.5px; }
 .p-next { margin: 4px 0 0; font-size: 12.5px; }
+
+/* --- VP-7: карточка ёмкости (числовые окна, прогресс, свежесть, refresh) --- */
+.p-cap { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;
+  padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.p-cap-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.p-cap-head .label { color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.cap-win { display: flex; flex-direction: column; gap: 4px; }
+.cap-win-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.cap-win-label { font-size: 12.5px; color: var(--muted); }
+.cap-win-pct { font-size: 12.5px; }
+.cap-bar { height: 8px; border-radius: 6px; background: var(--elevated);
+  overflow: hidden; border: 1px solid var(--border-soft); }
+.cap-fill { display: block; height: 100%; background: var(--ok); transition: width 220ms ease; }
+.cap-bar.level-warn .cap-fill { background: var(--warn); }
+.cap-bar.level-crit .cap-fill { background: var(--danger); }
+.cap-bar.level-muted .cap-fill { background: var(--border); }
+.cap-reset { margin: 0; font-size: 11.5px; }
+.cap-unavail { font-size: 12.5px; display: flex; flex-direction: column; gap: 2px; }
+.cap-unavail p { margin: 0; }
+.cap-meta { margin: 2px 0 0; font-size: 11.5px; }
+.cap-stale { margin: 0; font-size: 12px; color: var(--warn);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cap-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cap-note { margin: 0; }
+.small { font-size: 11.5px; }
+
+/* --- VP-7: Claude pool summary --- */
+.pool-summary { margin-bottom: 22px; }
+.pool-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 8px 0 10px; }
+.pool-kpi { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 9px; }
 .onb-list { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
 .filter-field { margin: 12px 0; }
 
@@ -404,6 +453,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .risk-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .risk { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .risk-action { font-size: 12.5px; }
+/* Кнопка закрытия предупреждения (доступная, 44px touch-target). */
+.warn-x {
+  margin-left: auto; background: transparent; border: 1px solid var(--border-soft);
+  color: var(--muted); border-radius: 6px; cursor: pointer; line-height: 1;
+  min-width: 44px; min-height: 44px; font-size: 18px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; align-self: center;
+}
+.warn-x:hover { color: var(--text); border-color: var(--border); }
 .diag summary { cursor: pointer; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .diag summary::-webkit-details-marker { color: var(--ember); }
 .diag[open] .kpi-grid { margin-top: 14px; }
@@ -444,4 +501,82 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .q-filters { gap: 8px; }
 }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+/* --- VP-7 Autonomy, GitHub & Time Machine ------------------------------- */
+/* Brand как keyboard-accessible home-link (§26): выглядит как заголовок, но
+   реагирует на фокус/hover и не перезагружает приложение. */
+.brand-home {
+  display: flex; align-items: center; gap: 10px; padding: 6px;
+  width: 100%; background: transparent; border: 1px solid transparent;
+  border-radius: 10px; cursor: pointer; text-align: left; color: inherit;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.brand-home:hover { background: color-mix(in srgb, var(--ember) 8%, transparent); }
+.brand-home:focus-visible {
+  outline: none; border-color: var(--ember);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 35%, transparent);
+}
+.brand-mark svg { display: block; }
+
+.small { font-size: 12px; }
+
+/* Режимы автономии */
+.mode-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-top: 8px; }
+.mode-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
+}
+.mode-name { font-size: 13px; font-weight: 600; color: var(--ember); letter-spacing: .02em; }
+
+/* CPU-кольцо (реальная утилизация) */
+.cpu-gauge {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px;
+}
+.cpu-txt { display: flex; flex-direction: column; gap: 2px; }
+.cpu-val { font-size: 15px; font-weight: 600; }
+
+/* Chip-toggle (capability выбор, compare-выбор) */
+.chip.toggle { cursor: pointer; user-select: none; }
+.chip.toggle input { margin-right: 6px; vertical-align: middle; accent-color: var(--ember); }
+.chip.toggle.on { border-color: var(--ember); background: color-mix(in srgb, var(--ember) 12%, transparent); }
+
+/* Emergency Stop активен — тревожное (не ember) свечение */
+.estop-on { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)) !important; }
+.estop-on.na-glow { box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent),
+                                0 8px 30px -12px color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* Текущий чекпоинт в Time Machine */
+.tr.tm-current, tr.tm-current { background: color-mix(in srgb, var(--ember) 7%, transparent); }
+tr.tm-current td { border-top: 1px solid color-mix(in srgb, var(--ember) 30%, transparent); }
+
+/* Route-переход контента (§28: 120–180 мс). Ключ по view — новый маунт. */
+.route-fade { animation: route-in 150ms ease both; }
+@keyframes route-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Loading-скелетоны (мягкий shimmer, graphite). */
+.skeleton { display: block; border-radius: 8px; background: var(--surface-2);
+  position: relative; overflow: hidden; min-height: 14px; }
+.skeleton::after { content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--faint) 22%, transparent), transparent);
+  transform: translateX(-100%); animation: skel 1200ms ease-in-out infinite; }
+.skeleton-row { height: 40px; margin-bottom: 8px; }
+@keyframes skel { to { transform: translateX(100%); } }
+
+/* Time Machine trace (§28: 400–600 мс) — safe replay в новую ветку. */
+.tm-trace { display: flex; align-items: center; gap: 0; margin: 10px 0; flex-wrap: wrap; }
+.tm-node { border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+  font-size: 12.5px; background: var(--surface-2); }
+.tm-node.src { color: var(--muted); }
+.tm-node.dst { color: var(--ember-strong); border-color: color-mix(in srgb, var(--ember) 40%, var(--border)); }
+.tm-arrow { position: relative; width: 40px; height: 2px; background: var(--border); overflow: hidden; }
+.tm-arrow::after { content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+  background: color-mix(in srgb, var(--ember) 60%, var(--border)); animation: tm-sweep 500ms ease-in-out infinite; }
+@keyframes tm-sweep { to { left: 100%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+  .skeleton::after, .tm-arrow::after { display: none; }
+}
+
+/* VP-7: отключённый профиль в таблице — приглушён (soft removal, §2). */
+.tbl tr.row-disabled { opacity: .55; }

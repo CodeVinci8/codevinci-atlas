@@ -62,6 +62,7 @@ class FirewallContext:
     declared_web_states: list[str] = field(default_factory=list)
     license_present: bool = True
     license_required: bool = False
+    license_spdx: str = "Apache-2.0"   # VP-7: владелец выбрал Apache-2.0 (§49, DECISIONS)
     freshness: dict = field(default_factory=dict)   # {source: FRESH|STALE|UNKNOWN}
     security_check_present: bool = True
     flagged_symbols: list[dict] = field(default_factory=list)  # [{name, file, refs}]
@@ -234,6 +235,16 @@ def gate_stale_review_head(ctx: FirewallContext) -> list[dict]:
 
 def gate_license_dependency(ctx: FirewallContext) -> list[dict]:
     if ctx.license_present:
+        # VP-7: LICENSE присутствует и выбрана владельцем (Apache-2.0). Старый
+        # «owner-decision pending» finding больше не эмитится. Фактический info.
+        if ctx.license_spdx:
+            return [_finding(
+                "license_dependency", "LICENSE_PRESENT", "info",
+                f"Лицензия: {ctx.license_spdx}",
+                evidence=f"Atlas LICENSE присутствует (SPDX {ctx.license_spdx}); "
+                         "reuse-аудит: копий стороннего кода нет (все REFERENCE/SPIKE)",
+                action="Ничего не требуется; лицензия зафиксирована владельцем в DECISIONS.",
+                blocking=False)]
         return []
     if ctx.license_required:
         return [_finding(

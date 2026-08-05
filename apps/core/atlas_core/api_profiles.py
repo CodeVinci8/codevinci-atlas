@@ -65,6 +65,57 @@ def onboarding(profile_id: str, req: OnboardingRequest) -> JSONResponse:
                         status_code=422)
 
 
+@router.get("/profiles/auth-health/report")
+def auth_health_report() -> JSONResponse:
+    """Read-only отчёт последних auth-health наблюдений (VP-7): нормализованное
+    состояние + observed_at + source + safe reason + STALE. Без credentials."""
+    from .auth_health import auth_health_report as _report
+    return JSONResponse({"auth_health": _report()})
+
+
+@router.post("/profiles/capacity/refresh")
+def refresh_capacity(alias: str | None = Query(None)) -> JSONResponse:
+    """Ручной bounded refresh числовых лимитов (§11.6): пробит официальные CLI-
+    источники (Codex app-server / Claude usage) под рантайм-пользователями и
+    персистит нормализованные наблюдения.
+
+    Границы безопасности: HTTP-путь **не bypass-ит** собственный интервал —
+    ``force=False``. Ответ честен по каждому alias: ``REFRESHED`` /
+    ``COOLDOWN`` (с ``cooldown_remaining_s``) / ``REFRESH_IN_PROGRESS``.
+    Обход cooldown возможен только доверенным deploy/admin-путём (CLI).
+    Токены/cookie не читаются; email/org — redaction на границе."""
+    from .capacity import reconcile_capacity
+    try:
+        results = reconcile_capacity(aliases=[alias] if alias else None, force=False)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+    in_progress = any(r.get("state") == "REFRESH_IN_PROGRESS" for r in results)
+    return JSONResponse({"refreshed": results, "refresh_in_progress": in_progress})
+
+
+@router.post("/profiles/capacity/start-window")
+def start_window(alias: str = Query(...)) -> JSONResponse:
+    """Owner-действие «Начать окно и обновить» для одного Claude-профиля (§11.6):
+    выполняет РОВНО один минимальный официальный ответ Claude (tools/MCP/repo off)
+    и фиксирует официальные ``rate_limit_event`` (статус окна + reset). Тратит
+    немного подписки. Уважает per-alias cooldown; не ретраит автоматически; не
+    запускает оба профиля и не создаёт фоновую работу. Credentials/PAYG не трогает."""
+    from .capacity import reconcile_capacity
+    try:
+        results = reconcile_capacity(aliases=[alias], force=False, start_window=True)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+    return JSONResponse({"started": results})
+
+
+@router.get("/profiles/claude-pool/summary")
+def claude_pool_summary() -> JSONResponse:
+    """Компактная сводка Claude Builder-пула (VP-7): авторизовано/eligible/активный
+    alias/ближайший reset/последняя причина роутинга. Без фиктивного combined-%."""
+    from .claude_pool import pool_summary_live
+    return JSONResponse({"claude_pool": pool_summary_live()})
+
+
 @router.get("/models")
 def list_models(provider: str | None = Query(None)) -> JSONResponse:
     return JSONResponse({"models": _models.list_models(provider=provider)})

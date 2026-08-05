@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
+import time
 
 from ..capacity import Capacity, unknown_capacity
 from ..contracts import JobPackage, Provider, RunResult, RunState, SessionCapability
@@ -29,6 +31,67 @@ from ..errors import AtlasError, classify
 from ..ids import new_id, utcnow_iso
 from ..redaction import redact
 from .base import AdapterResult
+
+
+class _Out:
+    """Лёгкий носитель результата subprocess (rc/stdout/stderr) для единого пути."""
+
+    def __init__(self, returncode: int, stdout: str, stderr: str):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _run_cancellable(argv, kw, *, timeout: float, cancel_event, poll: float = 0.4):
+    """Запустить процесс в отдельной группе и прерывать по ``cancel_event`` (Emergency
+    Stop) сигналами группе: SIGTERM, затем SIGKILL. Возвращает (rc, stdout, stderr,
+    cancelled). При timeout — тоже группа-kill и raise TimeoutExpired-эквивалент."""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         stdin=subprocess.DEVNULL, start_new_session=True, **kw)
+
+    def _kill_group():
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                p.terminate()
+            except OSError:
+                return
+        try:
+            p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+
+    deadline = time.monotonic() + timeout
+    cancelled = False
+    while True:
+        try:
+            p.wait(timeout=poll)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel_event is not None and cancel_event.is_set():
+            _kill_group()
+            cancelled = True
+            break
+        if time.monotonic() > deadline:
+            _kill_group()
+            try:
+                stdout, stderr = p.communicate(timeout=2)
+            except Exception:  # noqa: BLE001
+                stdout, stderr = "", ""
+            raise AtlasError(classify("timed out"))
+    try:
+        stdout, stderr = p.communicate(timeout=3)
+    except Exception:  # noqa: BLE001
+        stdout, stderr = "", ""
+    return p.returncode, stdout or "", stderr or "", cancelled
 
 
 class RealClaudeAdapter:
@@ -154,18 +217,30 @@ class RealClaudeAdapter:
         return unknown_capacity()
 
     def _execute(self, argv: list[str], job: JobPackage, *, profile_alias: str, root_path: str,
-                 session_id: str | None, run_as_user: str | None) -> AdapterResult:
+                 session_id: str | None, run_as_user: str | None, cancel_event=None) -> AdapterResult:
         wrapped, kw = self._wrap(argv, root_path, run_as_user)
-        try:
-            out = subprocess.run(wrapped, capture_output=True, text=True,
-                                 timeout=job.inputs.get("timeout_s", 150),
-                                 stdin=subprocess.DEVNULL, **kw)
-        except subprocess.TimeoutExpired as exc:
-            raise AtlasError(classify("timed out", exception=exc))
-        except Exception as exc:  # noqa: BLE001
-            raise AtlasError(classify(str(exc), exception=exc))
-        if out.returncode != 0:
-            raise AtlasError(classify(out.stderr or out.stdout, exit_code=out.returncode))
+        timeout = job.inputs.get("timeout_s", 150)
+        if cancel_event is None:
+            # Обычный bounded-путь (VP-5 pipeline): без изменения поведения.
+            try:
+                out = subprocess.run(wrapped, capture_output=True, text=True,
+                                     timeout=timeout, stdin=subprocess.DEVNULL, **kw)
+            except subprocess.TimeoutExpired as exc:
+                raise AtlasError(classify("timed out", exception=exc))
+            except Exception as exc:  # noqa: BLE001
+                raise AtlasError(classify(str(exc), exception=exc))
+            rc, stdout, stderr = out.returncode, out.stdout, out.stderr
+        else:
+            # call-8 C: отменяемый путь — Emergency Stop прерывает процесс группой
+            # сигналов (SIGTERM→SIGKILL) ДО нормального timeout; поздний результат
+            # не фиксируется (raise INTERRUPTED).
+            rc, stdout, stderr, cancelled = _run_cancellable(
+                wrapped, kw, timeout=timeout, cancel_event=cancel_event)
+            if cancelled:
+                raise AtlasError(classify("emergency stop: builder interrupted", exit_code=137))
+        if rc != 0:
+            raise AtlasError(classify(stderr or stdout, exit_code=rc))
+        out = _Out(rc, stdout, stderr)
         structured, sess, is_error = self._parse_stream_json(out.stdout)
         if is_error:
             raise AtlasError(classify("invalid output: claude result is_error", exit_code=1))
@@ -216,12 +291,13 @@ class RealClaudeAdapter:
         return {"text": text[:500]}
 
     def start(self, job: JobPackage, *, profile_alias: str, root_path: str,
-              executable: str | None = None, run_as_user: str | None = None) -> AdapterResult:
+              executable: str | None = None, run_as_user: str | None = None,
+              cancel_event=None) -> AdapterResult:
         if not self._resolve_exe(executable):
             raise AtlasError(classify("claude CLI не найден: login required"))
         argv = self.build_start_argv(job, self._resolve_exe(executable))
         return self._execute(argv, job, profile_alias=profile_alias, root_path=root_path,
-                             session_id=None, run_as_user=run_as_user)
+                             session_id=None, run_as_user=run_as_user, cancel_event=cancel_event)
 
     def resume(self, session_id: str, job: JobPackage, *, profile_alias: str, root_path: str,
                executable: str | None = None, run_as_user: str | None = None) -> AdapterResult:

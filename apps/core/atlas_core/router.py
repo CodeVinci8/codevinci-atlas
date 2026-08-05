@@ -59,6 +59,10 @@ class Candidate:
     affinity: bool = False  # тот же профиль, что на предыдущем совместимом шаге (safe affinity)
     last_used_ms: int = 0  # для LRU; 0 = никогда не использовался (наиболее предпочтителен)
     schedulable: bool = True
+    # VP-7 pool-ранжирование: min(остаток по окнам) когда наблюдение свежее
+    # (иначе None → числовой критерий не применяется, работает только rank). Выше — лучше.
+    remaining_min: float | None = None
+    fresh: bool = False  # наблюдение ёмкости свежее (иначе числовой remaining не учитываем)
 
 
 @dataclass
@@ -121,10 +125,15 @@ def route_profile(role, candidates: list[Candidate], *,
     if not eligible:
         return decide("", ReasonCode.NO_ELIGIBLE_PROFILE, False)
 
-    # 4 affinity · 5 capacity · 7 LRU · 8 deterministic tie (alias).
+    # 4 affinity · 5 capacity (rank, затем числовой остаток если свежо) · 7 LRU ·
+    # 8 deterministic tie (alias). Числовой остаток учитывается ТОЛЬКО когда оба
+    # сравниваемых наблюдения свежие (иначе -0.0 → не влияет), чтобы «highest
+    # min(5h,7d) remaining when observations are fresh» не работал по протухшим числам.
     def sort_key(c: Candidate):
+        rem = -(c.remaining_min) if (c.fresh and c.remaining_min is not None) else 0.0
         return (0 if c.affinity else 1,
                 _CAPACITY_RANK.get(c.capacity_status, 3),
+                rem,
                 c.last_used_ms,
                 c.alias)
 
@@ -138,9 +147,9 @@ def route_profile(role, candidates: list[Candidate], *,
         k0, k1 = sort_key(chosen), sort_key(eligible[1])
         if k0[0] != k1[0]:
             reason = ReasonCode.ROLE_READY_AFFINITY
-        elif k0[1] != k1[1]:
+        elif k0[1] != k1[1] or k0[2] != k1[2]:
             reason = ReasonCode.ROLE_READY_CAPACITY
-        elif k0[2] != k1[2]:
+        elif k0[3] != k1[3]:
             reason = ReasonCode.ROLE_READY_LRU
         else:
             reason = ReasonCode.DETERMINISTIC_TIE
