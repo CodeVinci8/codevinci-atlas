@@ -51,6 +51,11 @@ def seed(data_dir: str) -> None:
                     "disabled": dis}
     reg.write_text(json.dumps({"profiles": profs}, ensure_ascii=False), encoding="utf-8")
 
+    # call-8 F: guard — фикстура НИКОГДА не мигрирует живую БД (только изолированный
+    # ATLAS_DATA_DIR). Иначе — отказ до alembic.
+    from atlas_core.migration_guard import assert_isolated
+    assert_isolated(purpose="vp7-chrome-fixture")
+
     venv = _ROOT / ".venv" / "bin"
     subprocess.run([str(venv / "alembic"), "upgrade", "head"], cwd=str(_ROOT), check=True,
                    env={**os.environ, "PATH": f"{venv}:{os.environ.get('PATH', '')}",

@@ -453,6 +453,7 @@ export const ru: Catalog = {
   "profiles.staleData": "Последние известные числа (обновление не удалось)",
   "profiles.noNumeric": "Числовые лимиты недоступны",
   "profiles.disabledNote": "Отключён владельцем — истёкшая подписка. Замена появится в VP-8. Не в активном пуле и не в ёмкости.",
+  "profiles.disabledShort": "Отключён — не в ёмкости",
   "caperr.CLAUDE_ONBOARDING_REQUIRED":
     "Числовые лимиты недоступны в установленном Claude Code: интерактивная /usage закрыта онбордингом в изолированной среде официального CLI.",
   "caperr.CLAUDE_USAGE_TUI_NOT_HEADLESS":

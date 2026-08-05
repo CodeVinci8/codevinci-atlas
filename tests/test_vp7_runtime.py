@@ -24,12 +24,16 @@ class _AdapterResult:
 
 
 class OkAdapter:
-    """Успешный Builder-ответ."""
+    """Успешный Builder-ответ; фиксирует переданную идентичность (root/exe/user)."""
     def __init__(self):
         self.calls = []
+        self.identity = []
 
-    def start(self, job, *, profile_alias, root_path, **kw):
+    def start(self, job, *, profile_alias, root_path, executable=None, run_as_user=None,
+              cancel_event=None, **kw):
         self.calls.append(profile_alias)
+        self.identity.append({"root_path": root_path, "executable": executable,
+                              "run_as_user": run_as_user})
         return _AdapterResult(f"sess-{profile_alias}")
 
 
@@ -167,6 +171,23 @@ class TestRuntimeDispatch(RuntimeBase):
         self.assertFalse(r2["ok"])
         self.assertEqual(r2["reason"], "RUN_NOT_QUEUED")    # рестарт не дублирует
 
+    # --- call-8 B: реальная идентичность профиля (root/exe/user) из реестра ---
+    def test_dispatch_uses_real_profile_identity(self):
+        from atlas_core.runtime import start_builder_run
+        self._claude("claude-pro-01")
+        rid = self._run()
+        ad = OkAdapter()
+        # Явная идентичность (как из durable ProfileRegistry): не пустой root.
+        ident = {"claude-pro-01": {"root_path": "/var/lib/x/claude-pro-01",
+                                   "executable_path": "/var/lib/x/claude-pro-01/.local/bin/claude",
+                                   "runtime_user": "atlas-cl01", "provider": "claude"}}
+        r = start_builder_run(rid, adapter=ad, profile_roots=ident, actor="test")
+        self.assertTrue(r["ok"])
+        got = ad.identity[0]
+        self.assertEqual(got["root_path"], "/var/lib/x/claude-pro-01")   # не пустой root
+        self.assertEqual(got["run_as_user"], "atlas-cl01")               # изолированный unix-user
+        self.assertTrue(got["executable"].endswith("/.local/bin/claude"))  # per-profile exe
+
     # --- call-8 fix: Emergency Stop на production start boundary ---
     def test_emergency_blocks_dispatch_of_queued_run(self):
         from atlas_core import emergency
@@ -181,28 +202,60 @@ class TestRuntimeDispatch(RuntimeBase):
         self.assertEqual(ad.calls, [])                      # adapter не вызван
         self.assertEqual(self.runs.get_run(rid)["state"], "QUEUED")  # не продвинулся
 
-    def test_emergency_during_step_interrupts(self):
+    def test_emergency_interrupts_blocking_inflight_before_timeout(self):
+        """call-8 C: deliberately blocking adapter (ждёт cancel_event до «timeout»).
+        Emergency Stop из другого потока прерывает его ДО нормального таймаута; поздний
+        результат НЕ фиксируется (INTERRUPTED, не COLLECTING); аренда снята."""
+        import threading
+        import time
+
         from atlas_core import emergency
         from atlas_core.runtime import start_builder_run
         self._claude("claude-pro-01")
         rid = self._run()
 
-        class EngageMidStep:
-            calls: list = []
+        class BlockingAdapter:
+            NORMAL_TIMEOUT = 30.0  # «нормальный» долгий шаг
 
-            def start(self, job, *, profile_alias, root_path, **kw):
-                self.calls.append(profile_alias)
-                emergency.engage(reason="mid-step", actor="owner")  # Stop во время шага
+            def start(self, job, *, profile_alias, root_path, cancel_event=None, **kw):
+                # блокируемся до cancel_event ИЛИ нормального таймаута.
+                waited = cancel_event.wait(timeout=self.NORMAL_TIMEOUT) if cancel_event else False
+                if waited:  # прервано Emergency Stop — runtime увидит cancel.is_set() → INTERRUPTED
+                    from atlas_core.errors import AtlasError, classify
+                    raise AtlasError(classify("emergency interrupted"))
                 return _AdapterResult(f"sess-{profile_alias}")
 
-        ad = EngageMidStep()
-        r = start_builder_run(rid, adapter=ad, actor="test")
-        self.assertFalse(r["ok"])
-        self.assertEqual(r["reason"], "EMERGENCY_STOP")
-        # кооперативно прервано: INTERRUPTED, не COLLECTING; аренда освобождена.
-        self.assertEqual(self.runs.get_run(rid)["state"], "INTERRUPTED")
+        t0 = time.time()
+        result_box = {}
+        th = threading.Thread(target=lambda: result_box.update(
+            r=start_builder_run(rid, adapter=BlockingAdapter(), actor="test")))
+        th.start()
+        time.sleep(1.5)  # дать шагу начаться
+        emergency.engage(reason="interrupt in-flight", actor="owner")  # прерывание из вне
+        th.join(timeout=10)
+        elapsed = time.time() - t0
+        self.assertFalse(th.is_alive())                    # завершился (не завис на 30с)
+        self.assertLess(elapsed, 15)                       # ДО нормального таймаута (30с)
+        self.assertEqual(result_box["r"]["reason"], "EMERGENCY_STOP")
+        self.assertEqual(self.runs.get_run(rid)["state"], "INTERRUPTED")  # результат не зафиксирован
         from atlas_core.db import session_scope
         from atlas_core.orm import RunLease
         with session_scope() as s:
             leases = s.query(RunLease).filter(RunLease.run_id == rid).all()
             self.assertTrue(all(x.released_at != "" for x in leases))  # один writer снят
+
+    def test_run_cancellable_kills_real_subprocess_before_timeout(self):
+        """call-8 C: реальный subprocess (sleep 30) прерывается сигналом группы по
+        cancel_event ДО таймаута — доказательство настоящей отмены процесса."""
+        import threading
+        import time
+
+        from atlas_core.adapters.real_claude import _run_cancellable
+        ev = threading.Event()
+        threading.Timer(1.0, ev.set).start()  # отмена через 1с
+        t0 = time.time()
+        rc, out, err, cancelled = _run_cancellable(
+            ["sleep", "30"], {}, timeout=30.0, cancel_event=ev)
+        elapsed = time.time() - t0
+        self.assertTrue(cancelled)
+        self.assertLess(elapsed, 8)   # убит быстро, не ждал 30с

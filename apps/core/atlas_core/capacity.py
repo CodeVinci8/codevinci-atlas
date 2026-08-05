@@ -396,6 +396,34 @@ def _statusline_from_spool(spool_text: str) -> list[dict]:
     return out
 
 
+def statusline_filter_script(spool: str) -> str:
+    """Текст self-contained statusLine-фильтра (call-8 privacy, §3, D).
+
+    Читает сырой status-line JSON из stdin В ПАМЯТИ, извлекает ТОЛЬКО разрешённые
+    поля (rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}) и атомарно
+    пишет в spool (0600) уже нормализованный минимум. Сырой payload/prompt/response/
+    email/token/cookie/session/account на диск НЕ попадают. Всё прочее отбрасывается
+    до какой-либо persistent-записи."""
+    return (
+        "#!/usr/bin/python3\n"
+        "import sys,json,os,tempfile\n"
+        f"SPOOL={spool!r}\n"
+        "raw=sys.stdin.read()\n"
+        "try: d=json.loads(raw)\n"
+        "except Exception: d={}\n"
+        "rl=d.get('rate_limits') or {}\n"
+        "out={}\n"
+        "for w in ('five_hour','seven_day'):\n"
+        "    x=rl.get(w) if isinstance(rl,dict) else None\n"
+        "    x=x or {}\n"
+        "    up=x.get('used_percentage')\n"
+        "    if up is not None: out[w]={'used_percentage':up,'resets_at':x.get('resets_at')}\n"
+        "fd,tmp=tempfile.mkstemp(dir=os.path.dirname(SPOOL))\n"
+        "os.write(fd,json.dumps({'rate_limits':out}).encode()); os.close(fd)\n"
+        "os.chmod(tmp,0o600); os.replace(tmp,SPOOL)\n"
+        "print('atlas')\n")
+
+
 def _claude_statusline_windows(root: str, exe: str, user: str | None, timeout: float):
     """ОФИЦИАЛЬНЫЙ числовой сбор ёмкости через status-line ``rate_limits`` (§3):
     эфемерный ``--settings`` со statusLine-командой → spool 0600; интерактивная
@@ -419,10 +447,11 @@ def _claude_statusline_windows(root: str, exe: str, user: str | None, timeout: f
     sock = _os.path.join(work, "t.sock")
     session = "atlas-sl-" + uuid.uuid4().hex[:8]
     try:
-        # statusLine-скрипт: сбрасывает stdin JSON в spool (0600), печатает метку.
+        # statusLine-скрипт (call-8 privacy fix): фильтрует stdin В ПАМЯТИ и пишет
+        # на диск ТОЛЬКО нормализованные safe-поля. Сырой payload/prompt/response/
+        # email/token НИКОГДА не попадает в spool.
         with open(sl, "w") as f:
-            f.write('#!/bin/bash\numask 077\ncat > "%s.tmp"\nmv -f "%s.tmp" "%s"\necho atlas\n'
-                    % (spool, spool, spool))
+            f.write(statusline_filter_script(spool))
         _os.chmod(sl, 0o755)
         with open(settings, "w") as f:
             _json.dump({"statusLine": {"type": "command", "command": sl}, "theme": "dark",

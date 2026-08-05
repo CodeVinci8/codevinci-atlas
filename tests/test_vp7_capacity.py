@@ -374,6 +374,49 @@ for line in sys.stdin:
         self.assertEqual(res["error_code"], "CODEX_INIT_FAILED")
 
 
+class TestStatusLinePrivacy(CapBase):
+    def test_raw_payload_never_reaches_disk(self):
+        """call-8 privacy (§3.D): статус-лайн фильтр пишет на диск ТОЛЬКО
+        нормализованные rate_limits; sentinel-секреты/transcript/email/token/
+        session — никогда, даже если присутствуют в сыром payload."""
+        import subprocess
+
+        from atlas_core.capacity import statusline_filter_script
+        work = tempfile.mkdtemp(prefix="atlas-slpriv-")
+        spool = os.path.join(work, "rate.json")
+        script = os.path.join(work, "sl.py")
+        with open(script, "w") as f:
+            f.write(statusline_filter_script(spool))
+        os.chmod(script, 0o755)
+        # Сырой status-line JSON с sentinel-секретами + реальными rate_limits.
+        raw = json.dumps({
+            "session_id": "SENTINEL_SESSION_abc123",
+            "model": {"id": "claude-x"},
+            "workspace": {"current_dir": "/root/SENTINEL_PATH"},
+            "transcript": "SENTINEL_TRANSCRIPT owner@example.com ghp_SENTINELtoken",
+            "account": {"email": "SENTINEL_owner@example.com", "uuid": "SENTINEL_UUID"},
+            "rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+                            "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}},
+        })
+        subprocess.run(["python3", script], input=raw, text=True, capture_output=True, timeout=15)
+        with open(spool) as f:
+            written = f.read()
+        # Спул содержит только нормализованные rate_limits.
+        d = json.loads(written)
+        self.assertEqual(set(d.keys()), {"rate_limits"})
+        self.assertEqual(d["rate_limits"]["five_hour"]["used_percentage"], 23.5)
+        # Ни один sentinel не попал на диск.
+        for sentinel in ("SENTINEL_SESSION", "SENTINEL_PATH", "SENTINEL_TRANSCRIPT",
+                         "SENTINEL_owner", "SENTINEL_UUID", "ghp_SENTINEL", "@example.com",
+                         "session_id", "transcript", "account", "workspace"):
+            self.assertNotIn(sentinel, written)
+        # Спул 0600.
+        import stat
+        self.assertEqual(stat.S_IMODE(os.stat(spool).st_mode), 0o600)
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
+
+
 class TestClaudeProbe(CapBase):
     def _fake_claude(self, auth_json: str, stream_body: str = "") -> str:
         """Fake claude: `auth status --json` печатает auth_json; `-p … stream-json`

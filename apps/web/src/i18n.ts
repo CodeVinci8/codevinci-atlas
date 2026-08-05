@@ -467,6 +467,7 @@ export const LOCALE_KEYS = [
   "profiles.staleData",
   "profiles.noNumeric",
   "profiles.disabledNote",
+  "profiles.disabledShort",
   "caperr.CLAUDE_ONBOARDING_REQUIRED",
   "caperr.CLAUDE_USAGE_TUI_NOT_HEADLESS",
   "caperr.CLAUDE_USAGE_NO_PROMPT",

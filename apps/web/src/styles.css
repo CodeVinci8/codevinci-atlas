@@ -577,3 +577,6 @@ tr.tm-current td { border-top: 1px solid color-mix(in srgb, var(--ember) 30%, tr
   * { transition: none !important; animation: none !important; }
   .skeleton::after, .tm-arrow::after { display: none; }
 }
+
+/* VP-7: отключённый профиль в таблице — приглушён (soft removal, §2). */
+.tbl tr.row-disabled { opacity: .55; }

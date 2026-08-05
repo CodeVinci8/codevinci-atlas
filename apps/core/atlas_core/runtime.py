@@ -28,6 +28,47 @@ from .router import Candidate
 
 _BUILDER_ROLE = "builder"
 
+# call-8 C: реестр отменяемых in-flight jobs (run_id → cancel Event). Emergency Stop
+# устанавливает все события → adapter прерывает процесс группой сигналов. In-memory
+# (best-effort в пределах процесса Core); durable-состояние ведёт RunService/leases.
+import threading as _threading  # noqa: E402
+
+_ACTIVE_JOBS: dict[str, _threading.Event] = {}
+_JOBS_LOCK = _threading.Lock()
+
+
+def _register_job(run_id: str, cancel_event) -> None:
+    with _JOBS_LOCK:
+        _ACTIVE_JOBS[run_id] = cancel_event
+
+
+def _unregister_job(run_id: str) -> None:
+    with _JOBS_LOCK:
+        _ACTIVE_JOBS.pop(run_id, None)
+
+
+def cancel_all_jobs() -> int:
+    """Прервать все in-flight Builder-jobs (вызывается emergency.engage). Возвращает
+    число прерванных. Каждый job увидит set() и завершит провайдер-процесс сигналами."""
+    with _JOBS_LOCK:
+        events = list(_ACTIVE_JOBS.values())
+    for ev in events:
+        ev.set()
+    return len(events)
+
+
+def _resolve_identities() -> dict:
+    """alias → {root_path, executable_path, runtime_user, provider} из durable-реестра
+    (файловый ProfileRegistry, где есть изолированные root/exe/user). agent_profiles
+    хранит только safe-метаданные, поэтому идентичность исполнения берём из реестра."""
+    from .profiles import ProfileRegistry
+    out: dict = {}
+    for prof in ProfileRegistry().list():
+        out[prof.alias] = {"root_path": prof.root_path or "",
+                           "executable_path": prof.executable_path,
+                           "runtime_user": prof.runtime_user, "provider": prof.provider}
+    return out
+
 
 def build_builder_candidates(profiles: list[dict]) -> list[Candidate]:
     """Registry-driven кандидаты Builder из durable-профилей (claude-пул).
@@ -58,6 +99,21 @@ def _ver(run_svc, run_id: str) -> int:
     return run_svc.get_run(run_id)["version"]
 
 
+def _safe_interrupt(run_svc, run_id: str, *, reason: str, actor: str) -> None:
+    """Идемпотентно перевести Run в INTERRUPTED. Терпит гонку с
+    emergency.engage(), который мог уже перевести Run (терминально/INTERRUPTED)
+    и инкрементировать версию — тогда no-op (VERSION_CONFLICT/INVALID не роняют)."""
+    from .runs import TERMINAL, RunError
+    cur = run_svc.get_run(run_id)
+    if cur["state"] == "INTERRUPTED" or cur["state"] in TERMINAL:
+        return
+    try:
+        run_svc.transition(run_id, "INTERRUPTED", expected_version=cur["version"],
+                           reason=reason, blocker="EMERGENCY_STOP", actor=actor)
+    except RunError:
+        pass  # emergency уже перевёл Run — durable-состояние согласовано
+
+
 def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None,
                       profiles: list[dict] | None = None, profile_roots: dict | None = None,
                       actor: str = "core") -> dict:
@@ -75,7 +131,9 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
     run_svc = run_svc or RunService()
     lease_svc = lease_svc or RunLeaseService(load_settings().db_path)
     profiles = profiles if profiles is not None else ProfileService().list_profiles()
-    roots = profile_roots or {}
+    # call-8 B: реальная идентичность профиля (root/exe/user) из durable-реестра,
+    # НЕ пустой root (иначе RealClaudeAdapter упадёт на глобальный claude/чужой HOME).
+    identity = profile_roots if profile_roots is not None else _resolve_identities()
     if adapter is None:
         from .adapters.real_claude import RealClaudeAdapter
         adapter = RealClaudeAdapter()
@@ -134,12 +192,30 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
         run_svc.transition(run_id, "RUNNING", expected_version=_ver(run_svc, run_id),
                            reason=f"builder={profile}")
         reached_running = True
-        root = roots.get(profile, "")
+        # call-8 B: реальная идентичность выбранного профиля из durable-реестра.
+        ident = identity.get(profile) or {}
+        root = ident.get("root_path", "")
+        exe = ident.get("executable_path")
+        ruser = ident.get("runtime_user")
+        # call-8 C: отменяемый job — cancel_event регистрируется, чтобы Emergency Stop
+        # прервал in-flight провайдер-процесс сигналами группы (до нормального timeout).
+        import threading as _th
+        cancel = _th.Event()
+        _register_job(run_id, cancel)
         try:
-            res = adapter.start(_builder_job(), profile_alias=profile, root_path=root)
+            res = adapter.start(_builder_job(), profile_alias=profile, root_path=root,
+                                executable=exe, run_as_user=ruser, cancel_event=cancel)
         except AtlasError as exc:
+            _unregister_job(run_id)
             code = getattr(getattr(exc, "classified", None), "code", None)
             lease_svc.release(lease.id)  # release-before-switch (не второй writer)
+            # call-8 C: прерывание Emergency Stop во время шага → INTERRUPTED (не switch).
+            if cancel.is_set() or emergency.is_active():
+                _safe_interrupt(run_svc, run_id, reason="Emergency Stop прервал builder",
+                                actor=actor)
+                audit.record("runs.dispatch.emergency_interrupt",
+                             f"run={run_id} profile={profile}", actor=actor)
+                return {"ok": False, "reason": "EMERGENCY_STOP", "effective": profile}
             if code == ErrorCode.RATE_LIMITED:
                 run_svc.transition(run_id, "RATE_LIMITED", expected_version=_ver(run_svc, run_id),
                                    reason="builder rate limit")
@@ -164,14 +240,13 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
                                blocker=f"builder:{code.value if code else 'ERROR'}")
             return {"ok": False, "reason": code.value if code else "ERROR", "effective": profile}
 
-        # 4. call-8 fix: если Emergency Stop активирован во время шага — кооперативно
-        #    прервать (INTERRUPTED), не продвигая Run в COLLECTING; аренду освободить
-        #    (один writer сохраняется; результат шага не фиксируется как прогресс).
-        if emergency.is_active():
+        _unregister_job(run_id)
+        # 4. call-8 C: Emergency Stop во время шага (кооперативно, если adapter вернул
+        #    без исключения) → INTERRUPTED, не COLLECTING; результат не фиксируется.
+        if cancel.is_set() or emergency.is_active():
             lease_svc.release(lease.id)
-            run_svc.transition(run_id, "INTERRUPTED", expected_version=_ver(run_svc, run_id),
-                               reason="Emergency Stop во время builder-шага",
-                               blocker="EMERGENCY_STOP")
+            _safe_interrupt(run_svc, run_id, reason="Emergency Stop во время builder-шага",
+                            actor=actor)
             audit.record("runs.dispatch.emergency_interrupt", f"run={run_id} profile={profile}",
                          actor=actor)
             return {"ok": False, "reason": "EMERGENCY_STOP", "effective": profile}

@@ -67,6 +67,17 @@ def engage(*, reason: str = "", actor: str = "owner", correlation_id: str = "") 
     audit.record("emergency.stop.engaged.before",
                  f"reason={redact(reason)[:60]}", actor=actor, correlation_id=correlation_id)
 
+    # call-8 C: немедленно прервать in-flight Builder-процессы (сигналы группе) ДО
+    # durable-обновлений, чтобы провайдер не дописал результат после снятия аренды.
+    try:
+        from .runtime import cancel_all_jobs
+        cancelled_jobs = cancel_all_jobs()
+        if cancelled_jobs:
+            audit.record("emergency.stop.jobs_cancelled", f"count={cancelled_jobs}",
+                         actor=actor, correlation_id=correlation_id)
+    except Exception:  # noqa: BLE001 — прерывание in-flight не должно ломать engage
+        pass
+
     interrupted = _interrupt_active_runs(correlation_id=correlation_id)
     released = _release_active_leases()
 

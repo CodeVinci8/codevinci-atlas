@@ -57,6 +57,22 @@ function winLabel(w: CapacityWindow, t: T): string {
   return t((`cap.win.${w.id}`) as LocaleKey) ?? w.label;
 }
 
+// Правдивый текст ёмкости для компактной ячейки: числовой % (Codex/Claude status-
+// line), локализованный статус окна (Claude event), либо — если чисел нет —
+// объяснение. Никогда null%/undefined%/%/%/фиктивный 0%.
+function capacityCellText(cap: CapacityView, provider: string, t: T): string {
+  const win = (cap.windows ?? [])[0];
+  if (win && win.used_pct !== null && win.used_pct !== undefined) {
+    const rem = win.remaining_pct !== null && win.remaining_pct !== undefined
+      ? ` / ${win.remaining_pct}% ${t("profiles.remaining")}` : "";
+    return `${winLabel(win, t)}: ${win.used_pct}% ${t("profiles.used")}${rem}`;
+  }
+  if (win && win.status) {
+    return `${winLabel(win, t)}: ${t((`cap.status.${win.status.toLowerCase()}`) as LocaleKey) ?? win.status}`;
+  }
+  return capErrExplain(cap.error_code, provider, t);
+}
+
 // Одно окно: числовое (Codex used/remaining %+бар) ИЛИ статус-окно (Claude
 // allowed/warning/rejected без фикции %). Плюс подпись, сброс и обратный отсчёт.
 function WindowRow({ w, t, locale }: { w: CapacityWindow; t: T; locale: Locale }) {
@@ -382,18 +398,21 @@ export function ProfilesView({ t, locale }: { t: T; locale: Locale }) {
             <tbody>
               {shown.map((p) => {
                 const cap = p.capacity;
-                const win = (cap.windows ?? [])[0];
+                const disabled = p.enabled === false || p.state === "DISABLED";
                 return (
-                  <tr key={p.id}>
+                  <tr key={p.id} className={disabled ? "row-disabled" : ""}>
                     <td className="mono">{p.alias}</td>
                     <td>{p.provider}</td>
-                    <td><AuthBadge status={authByAlias[p.alias] ?? "UNKNOWN"} t={t} /></td>
-                    <td>{planLabel(p.provider, cap.plan || p.health?.plan_label, t)}</td>
-                    <td>{win
-                      ? <span className="mono">{winLabel(win, t)} {win.used_pct}%/{win.remaining_pct}%</span>
-                      : <span className="muted small">{capErrExplain(cap.error_code, p.provider, t)}</span>}
+                    <td>{disabled
+                      ? <StateBadge state="DISABLED" t={t} />
+                      : <AuthBadge status={authByAlias[p.alias] ?? "UNKNOWN"} t={t} />}</td>
+                    <td>{disabled ? "—" : planLabel(p.provider, cap.plan || p.health?.plan_label, t)}</td>
+                    <td>{disabled
+                      ? <span className="muted small">{t("profiles.disabledShort")}</span>
+                      : <span className="small">{capacityCellText(cap, p.provider, t)}
+                          {cap.source && <span className="muted"> · {cap.source}</span>}</span>}
                     </td>
-                    <td className="small">{cap.observed_at
+                    <td className="small">{!disabled && cap.observed_at
                       ? <time dateTime={cap.observed_at}>{fmtRelative(cap.observed_at, locale)}</time>
                       : "—"}</td>
                   </tr>
