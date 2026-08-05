@@ -351,6 +351,24 @@ class TestGithubAdapter(VP7Base):
         # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
         self.assertFalse(hasattr(self.ad, "squash_merge"))
 
+    # --- call-9 fix (finding 2): реальный merge пишет durable delivery-историю ---
+    def test_merge_records_authoritative_delivery(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.deliveries import list_deliveries
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        prod.merge_pull_request(project_id="p", review_package_id=rp, quality_report_id=qr,
+                                pr_number=prn, expected_head=sha, grant_id=g["id"], base="main")
+        # durable история доставки содержит АВТОРИТЕТНУЮ запись реального merge (PERMIT).
+        dels = list_deliveries(project_id="p")
+        merged = [d for d in dels if d.get("gate_decision") == "PERMIT"
+                  and d.get("head_sha") == sha and d.get("pr_state") == "MERGED"]
+        self.assertTrue(merged, "реальный merge должен записать durable delivery PERMIT/MERGED")
+        self.assertEqual(merged[0]["actor"], "merge")
+
     # --- call-7 REVISE fix (CRITICAL): base сверяется с ЖИВЫМ pr.base ---
     def test_authoritative_base_mismatch_denies(self):
         from atlas_core.autonomy import create_grant

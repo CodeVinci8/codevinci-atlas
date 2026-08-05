@@ -565,4 +565,22 @@ class GitHubAdapter:
                                       author_name=name or "CodeVinci", author_email=email or "")
         audit.record("github.merge.after", f"pr=#{pr_number} merged={res.get('merged')}",
                      correlation_id=correlation_id)
+        # call-9 fix (finding 2): АВТОРИТЕТНАЯ доставка попадает в durable history
+        # ИЗ реального merge-пути (не только из preview). Пишем факт merge с gate
+        # PERMIT, live-base и merge-SHA — идемпотентно по ключу repo+base+branch+head.
+        try:
+            from .deliveries import record_delivery
+            live_base = (fresh.base if fresh else base) or base
+            record_delivery(
+                project_id=eff_project, repo=self._forge_repo() or "", base=live_base,
+                branch=(fresh.head_branch if fresh else ""), head_sha=expected_head,
+                pr_number=pr_number, pr_state="MERGED",
+                checks_state="GREEN", checks_head_sha=expected_head,
+                mergeable=True, merge_state="MERGED",
+                review_package_id=review_package_id, quality_report_id=quality_report_id,
+                gate_decision="PERMIT", gate_reason=auth.reason_code, grant_id=grant_id,
+                correlation_id=correlation_id, actor="merge")
+        except Exception as exc:  # noqa: BLE001 — запись истории не должна отменять сам merge
+            audit.record("github.merge.delivery_record_failed",
+                         f"pr=#{pr_number} {type(exc).__name__}", correlation_id=correlation_id)
         return {**res, "authorization": auth.reason_code}

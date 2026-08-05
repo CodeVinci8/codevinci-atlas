@@ -202,6 +202,16 @@ def start_builder_run(run_id: str, *, run_svc=None, lease_svc=None, adapter=None
         import threading as _th
         cancel = _th.Event()
         _register_job(run_id, cancel)
+        # call-9 fix (TOCTOU): ре-проверка ПОСЛЕ регистрации cancel_event. Вместе с
+        # emergency._ENGAGING (истина до durable-commit) это закрывает окно: либо мы
+        # видим blocks_new_jobs() здесь и аборт-имся, либо наш cancel_event уже в
+        # реестре к моменту cancel_all_jobs() и будет прерван.
+        if emergency.blocks_new_jobs():
+            _unregister_job(run_id)
+            lease_svc.release(lease.id)
+            _safe_interrupt(run_svc, run_id, reason="Emergency Stop (гонка на старте)",
+                            actor=actor)
+            return {"ok": False, "reason": "EMERGENCY_STOP", "effective": profile}
         try:
             res = adapter.start(_builder_job(), profile_alias=profile, root_path=root,
                                 executable=exe, run_as_user=ruser, cancel_event=cancel)

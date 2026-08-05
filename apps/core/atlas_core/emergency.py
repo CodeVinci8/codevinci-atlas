@@ -28,6 +28,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# call-9 fix (TOCTOU): in-process флаг «engage начался» — становится истинным ДО
+# durable-записи active=True и cancel_all_jobs(), поэтому blocks_new_jobs() запрещает
+# новые старты сразу, закрывая окно между снимком jobs и durable-commit. Снимается
+# после durable-commit (тогда истину держит durable active) и на resume.
+import threading as _threading  # noqa: E402
+
+_ENGAGING = _threading.Event()
+
+
 def is_active() -> bool:
     """Активен ли Emergency Stop сейчас (durable, переживает рестарт)."""
     with session_scope() as s:
@@ -38,8 +47,9 @@ def is_active() -> bool:
 
 
 def blocks_new_jobs() -> bool:
-    """Новые jobs запрещены, пока Emergency Stop активен."""
-    return is_active()
+    """Новые jobs запрещены, пока Emergency Stop активен ИЛИ engage() в процессе
+    (закрытие TOCTOU-окна до durable-commit)."""
+    return _ENGAGING.is_set() or is_active()
 
 
 def status() -> dict:
@@ -64,37 +74,46 @@ def engage(*, reason: str = "", actor: str = "owner", correlation_id: str = "") 
                      correlation_id=correlation_id)
         return status()
 
-    audit.record("emergency.stop.engaged.before",
-                 f"reason={redact(reason)[:60]}", actor=actor, correlation_id=correlation_id)
-
-    # call-8 C: немедленно прервать in-flight Builder-процессы (сигналы группе) ДО
-    # durable-обновлений, чтобы провайдер не дописал результат после снятия аренды.
+    # call-9 fix (TOCTOU): пометить «engage начался» ПЕРВЫМ действием — с этого
+    # момента blocks_new_jobs() истинно, и любой новый/re-checking job аборт-ится
+    # ещё до durable-commit. Снимаем флаг в finally после commit (истину держит
+    # durable active=True).
+    _ENGAGING.set()
     try:
-        from .runtime import cancel_all_jobs
-        cancelled_jobs = cancel_all_jobs()
-        if cancelled_jobs:
-            audit.record("emergency.stop.jobs_cancelled", f"count={cancelled_jobs}",
-                         actor=actor, correlation_id=correlation_id)
-    except Exception:  # noqa: BLE001 — прерывание in-flight не должно ломать engage
-        pass
+        audit.record("emergency.stop.engaged.before",
+                     f"reason={redact(reason)[:60]}", actor=actor, correlation_id=correlation_id)
 
-    interrupted = _interrupt_active_runs(correlation_id=correlation_id)
-    released = _release_active_leases()
+        # call-8 C: немедленно прервать in-flight Builder-процессы (сигналы группе).
+        # Порядок с _ENGAGING гарантирует: job, зарегистрировавшийся до снимка, будет
+        # отменён; стартующий после — увидит blocks_new_jobs() и аборт-ится.
+        try:
+            from .runtime import cancel_all_jobs
+            cancelled_jobs = cancel_all_jobs()
+            if cancelled_jobs:
+                audit.record("emergency.stop.jobs_cancelled", f"count={cancelled_jobs}",
+                             actor=actor, correlation_id=correlation_id)
+        except Exception:  # noqa: BLE001 — прерывание in-flight не должно ломать engage
+            pass
 
-    import json as _json
-    sid = new_id("estop")
-    now = _now()
-    with session_scope() as s:
-        s.add(EmergencyStop(
-            id=sid, action="ENGAGED", active=True, reason=redact(reason)[:800],
-            actor=actor, correlation_id=correlation_id,
-            interrupted_runs_json=_json.dumps(interrupted, ensure_ascii=False),
-            released_leases_json=_json.dumps(released, ensure_ascii=False),
-            created_at=now))
-        s.commit()
-    audit.record("emergency.stop.engaged.after",
-                 f"interrupted={len(interrupted)} released={len(released)}",
-                 actor=actor, correlation_id=correlation_id)
+        interrupted = _interrupt_active_runs(correlation_id=correlation_id)
+        released = _release_active_leases()
+
+        import json as _json
+        sid = new_id("estop")
+        now = _now()
+        with session_scope() as s:
+            s.add(EmergencyStop(
+                id=sid, action="ENGAGED", active=True, reason=redact(reason)[:800],
+                actor=actor, correlation_id=correlation_id,
+                interrupted_runs_json=_json.dumps(interrupted, ensure_ascii=False),
+                released_leases_json=_json.dumps(released, ensure_ascii=False),
+                created_at=now))
+            s.commit()
+        audit.record("emergency.stop.engaged.after",
+                     f"interrupted={len(interrupted)} released={len(released)}",
+                     actor=actor, correlation_id=correlation_id)
+    finally:
+        _ENGAGING.clear()  # durable active=True теперь держит blocks_new_jobs()
     return status()
 
 

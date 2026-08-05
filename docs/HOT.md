@@ -49,8 +49,12 @@
   `fad8449`) → genuine **REVISE** (Emergency Stop не закрывал production start
   boundary; grant не проверял starts_at) → исправлено (emergency-check в
   start_builder_run + кооперативный interrupt; `_not_yet_active`/GRANT_NOT_YET_ACTIVE)
-  с тестами. **VP-7 не закрыт** (genuine REVISE, call-8 израсходован). Следующий —
-  **call 9/9** по исправленному head; call-7/8 не переименовываются в PASS.
+  с тестами. call **9** (head `515acb0`, codex-plus-02, т.к. codex-plus-01 исчерпан
+  0%) → genuine **REVISE** (Emergency TOCTOU; github_deliveries не писалась реальным
+  merge) → исправлено (engage _ENGAGING-флаг + re-check после регистрации job;
+  merge_pull_request пишет authoritative delivery) с тестами. Лимит на число
+  Reviewer-вызовов снят владельцем (последовательно до PASS). call-7/8/9 immutable,
+  не переименовываются в PASS.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

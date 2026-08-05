@@ -244,6 +244,24 @@ class TestRuntimeDispatch(RuntimeBase):
             leases = s.query(RunLease).filter(RunLease.run_id == rid).all()
             self.assertTrue(all(x.released_at != "" for x in leases))  # один writer снят
 
+    def test_engage_flag_blocks_new_jobs_before_durable_commit(self):
+        """call-9 fix (TOCTOU): пока engage() в процессе (in-process флаг), новые
+        старты запрещены ещё ДО durable-commit — окно закрыто."""
+        from atlas_core import emergency
+        from atlas_core.runtime import start_builder_run
+        self._claude("claude-pro-01")
+        rid = self._run()
+        emergency._ENGAGING.set()  # имитируем «engage начался» (до durable active)
+        try:
+            self.assertTrue(emergency.blocks_new_jobs())      # запрещает сразу
+            ad = OkAdapter()
+            r = start_builder_run(rid, adapter=ad, actor="test")
+            self.assertFalse(r["ok"])
+            self.assertEqual(r["reason"], "EMERGENCY_STOP")   # аборт до adapter
+            self.assertEqual(ad.calls, [])
+        finally:
+            emergency._ENGAGING.clear()
+
     def test_run_cancellable_kills_real_subprocess_before_timeout(self):
         """call-8 C: реальный subprocess (sleep 30) прерывается сигналом группы по
         cancel_event ДО таймаута — доказательство настоящей отмены процесса."""
