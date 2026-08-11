@@ -215,11 +215,53 @@ call-8 пишет в `call-8/` и не перезаписывает call-7. call
    Тесты `test_future_starts_at_denies_not_yet_active`, `test_past_starts_at_still_permits`.
 
 Обе находки исправлены с тестами; **merge не исполнялся, PASS не фабриковался**.
-call-8 — единственный авторизованный вызов этой сессии → VP-7 **не закрыт**
-(genuine REVISE). Правки не проверены (call-8 израсходован). Полная регрессия
-**402 OK**; acceptance 34/34; живая БД остаётся `0006`. NEXT: новый owner-
-авторизованный Reviewer-вызов (**call 9/9**) по исправленному head; при genuine
-PASS — merge/backup/миграция/deploy/truth-sync. Evidence: `final_review/call-8/`.
+Полная регрессия **402 OK**; acceptance 34/34; живая БД остаётся `0006`.
+Evidence: `final_review/call-8/`.
+
+### call 9 — genuine REVISE (head `515acb0`, codex-plus-02)
+
+Лимит на число Reviewer-вызовов снят владельцем (последовательно до PASS).
+Находки: Emergency Stop TOCTOU (окно между снимком jobs и durable-commit);
+`github_deliveries` не писалась реальным merge. **Fix:** in-process `_ENGAGING`
+до durable-commit + re-check после регистрации job; `merge_pull_request` пишет
+authoritative delivery. Исправлено `774ed7b` с тестами. Evidence:
+`final_review/call-9/`.
+
+### call 10 — genuine REVISE (head `896cc9b`, codex-plus-01)
+
+Находки: grant consume TOCTOU (списание не привязано к оценённой version);
+недостаточная строгость `checks()`/`mergeability()`; delivery не durable до
+squash; Emergency не проверялся у самой merge-boundary. **Fix:** атомарная
+ре-валидация в `consume_budget`; строгие checks (только success, neutral не в
+счёт) + `mergeStateStatus==CLEAN`; authoritative delivery до squash; Emergency
+re-check у boundary. Исправлено `2f54e39`/`896cc9b` с тестами. Evidence:
+`final_review/call-10/`.
+
+### call 11 — genuine REVISE (head `2d13d04`, codex-plus-02) + аудит перед call-12
+
+Четыре находки Time Machine: (1) replay создавал ветку из `base_sha`, теряя
+`base..head` — не воспроизводил состояние checkpoint; (2) реальный replay не был
+подключён к production API (только preview); (3) `compare()` не верифицировал
+checkpoints (tampered принимался); (4) детерминированное имя ветки/dedup Run —
+повторный replay конфликтовал. **Fix:** ветка из `head_sha` + verify состояния;
+`replay_production` через **доверенный checkout из durable Worktree/Project**
+(HTTP-endpoint не принимает произвольный путь каллера); `compare` верифицирует
+оба checkpoint (fail-closed); уникальный энтропийный токен на каждый replay +
+preview показывает **паттерн**, не точное имя. HTTP-интеграционный тест доказывает
+10 свойств (новый Run, реальная ветка = `head_sha`, файл checkpoint, повтор →
+новые ветка/Run, source не переписан, tamper → отказ, Emergency → без ветки/Run).
+
+Перед call-12 закрыты 3 остаточных риска аудита: **A** — списание бюджета строго
+на оценённой `Decision.version` (снимок), без перечитывания более новой; **B** —
+барьер Emergency Stop **у каждой** необратимой forge-границы (commit/push/
+create_pr/merge), а не только в начале `_consume`; **C** — явная политика
+обязательных CI-контекстов Atlas (`classify_check_runs`): head зелёный только при
+наличии всех required-jobs со `success` (закрывает отсутствующую/постороннюю/
+pending/skipped/дублированную job). Регрессия **429 OK**; acceptance 34/34; Chrome
+50/50 (39 PNG + sha256-manifest); секрет-скан ЧИСТО; живая БД остаётся `0006`.
+call-7…11 immutable. NEXT: **call 12** по исправленному зелёному head (лимиты
+Codex сброшены владельцем); при genuine PASS — merge/backup/миграция/deploy/
+truth-sync.
 
 ## Границы (не VP-8/VP-9)
 

@@ -34,6 +34,67 @@ _GH_TIMEOUT = 90
 # Ветки, в которые прямой push/commit запрещён (§20.3).
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
+# call-11 audit (risk C): ЯВНАЯ политика обязательных CI-контекстов Atlas. Merge-gate
+# принимает head как зелёный ТОЛЬКО если ВСЕ эти контексты присутствуют для точного
+# head со статусом success. Имена = job `name:` из .github/workflows/ci.yml (совпадают
+# с name check-run'ов GitHub Actions). Переопределяется env ATLAS_REQUIRED_CHECKS
+# (comma-separated; пустая строка = политика отключена — для синтетических repo/тестов).
+ATLAS_REPO = "CodeVinci8/codevinci-atlas"
+REQUIRED_CHECK_CONTEXTS: frozenset[str] = frozenset({
+    "Python (lint, tests, migrations)",
+    "Web (typecheck, i18n, build)",
+    "Core image (fresh-session consumer в образе)",
+    "Секрет-скан",
+})
+# Заключения check-run, при которых head НЕ зелёный (failure-класс §20).
+_CHECK_BAD_CONCLUSIONS: frozenset[str] = frozenset({
+    "failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale",
+})
+
+
+def _resolve_required_contexts(repo: str) -> frozenset[str]:
+    """Обязательные контексты для repo: env-override → дефолт Atlas (только для
+    production-repo) → пусто (произвольные/синтетические repo не подчиняются политике
+    Atlas). Пустая политика ⇒ legacy-поведение (all-success), не «всегда зелено»."""
+    env = os.environ.get("ATLAS_REQUIRED_CHECKS")
+    if env is not None:
+        return frozenset(x.strip() for x in env.split(",") if x.strip())
+    return REQUIRED_CHECK_CONTEXTS if repo == ATLAS_REPO else frozenset()
+
+
+def classify_check_runs(runs: list[dict], required_contexts=()) -> dict:
+    """Чистая классификация состояния head по его check-runs (risk C, fail-closed).
+
+    Правила: любой незавершённый run → ``PENDING`` (head не устоялся); любое
+    failure-класс заключение → ``FAILING``; иначе, если задана политика
+    ``required_contexts`` — КАЖДЫЙ обязательный контекст обязан присутствовать со
+    статусом ``success`` (skipped/neutral НЕ засчитываются; отсутствие →
+    ``FAILING`` с ``missing``); дубли (push+PR) дедуплицируются по имени. Без
+    политики — legacy: все заключения success/skipped и хотя бы один success.
+    Runs для другого SHA сюда не попадают (API запрашивается per head_sha)."""
+    required = set(required_contexts or ())
+    if not runs:
+        out = {"state": "PENDING", "runs": 0}
+        if required:
+            out["missing"] = sorted(required)
+        return out
+    if any(r.get("status") != "completed" for r in runs):
+        return {"state": "PENDING", "runs": len(runs)}
+    if any(r.get("conclusion") in _CHECK_BAD_CONCLUSIONS for r in runs):
+        return {"state": "FAILING", "runs": len(runs)}
+    success_names = {r.get("name") for r in runs if r.get("conclusion") == "success"}
+    if required:
+        missing = sorted(required - success_names)
+        if missing:
+            return {"state": "FAILING", "runs": len(runs), "missing": missing}
+        return {"state": "GREEN", "runs": len(runs)}
+    # Legacy (политика не задана): все заключения success/skipped и есть success.
+    if not any(r.get("conclusion") == "success" for r in runs):
+        return {"state": "FAILING", "runs": len(runs)}
+    if not all(r.get("conclusion") in ("success", "skipped") for r in runs):
+        return {"state": "FAILING", "runs": len(runs)}
+    return {"state": "GREEN", "runs": len(runs)}
+
 
 class GitContractError(Exception):
     """Нарушение git-контракта. ``code`` — стабильный reason."""
@@ -272,8 +333,12 @@ class GhForge:
     """Реальный forge через `gh` runtime-пользователя. Token не читается/не
     хранится Core. Все команды — read-only статус/JSON, кроме явных create/merge."""
 
-    def __init__(self, repo: str):
+    def __init__(self, repo: str, *, required_contexts=None):
         self.repo = repo  # owner/name
+        # call-11 audit (risk C): явная политика обязательных CI-контекстов. None →
+        # выводится из repo (env-override / дефолт Atlas / пусто) в checks().
+        self.required_contexts = (frozenset(required_contexts)
+                                  if required_contexts is not None else None)
 
     def _gh(self, *args: str, timeout: int = _GH_TIMEOUT) -> subprocess.CompletedProcess:
         return subprocess.run(["gh", *args], capture_output=True, text=True,
@@ -341,21 +406,19 @@ class GhForge:
         if r.returncode != 0:
             return {"head_sha": head_sha, "state": "UNKNOWN", "detail": redact(r.stderr)[:120]}
         runs = json.loads(r.stdout or "[]")
-        if not runs:
-            return {"head_sha": head_sha, "state": "PENDING", "runs": 0}
-        if any(x.get("status") != "completed" for x in runs):
-            return {"head_sha": head_sha, "state": "PENDING", "runs": len(runs)}
-        # call-10 fix (finding 2): строго — все завершённые check-runs должны быть
-        # ``success`` (neutral больше НЕ считается прохождением; failure/cancelled/
-        # timed_out/action_required → FAILING). Авторитетную проверку required-
-        # contexts даёт mergeStateStatus==CLEAN в mergeability() (см. §9 gate);
-        # checks() — corroborating signal без «случайного» прохождения.
-        bad = {"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}
-        if any(x.get("conclusion") in bad for x in runs):
-            return {"head_sha": head_sha, "state": "FAILING", "runs": len(runs)}
-        ok = all(x.get("conclusion") in ("success", "skipped") for x in runs) and \
-            any(x.get("conclusion") == "success" for x in runs)
-        return {"head_sha": head_sha, "state": "GREEN" if ok else "FAILING", "runs": len(runs)}
+        # call-11 audit (risk C): помимо строгих заключений (call-10) энфорсим ЯВНУЮ
+        # политику обязательных контекстов Atlas — head зелёный ТОЛЬКО если ВСЕ
+        # required-контексты присутствуют для этого head со статусом success. Это
+        # закрывает «отсутствует обязательная job», «зелена лишь посторонняя job»,
+        # «required pending/skipped/neutral», а дубли push+PR дедуплицируются.
+        # mergeStateStatus==CLEAN в mergeability() остаётся вторым авторитетным
+        # барьером (branch protection required contexts).
+        required = getattr(self, "required_contexts", None)
+        if required is None:
+            required = _resolve_required_contexts(self.repo)
+        res = classify_check_runs(runs, required)
+        res["head_sha"] = head_sha
+        return res
 
     def mergeability(self, number: int) -> dict:
         r = self._gh("pr", "view", str(number), "--repo", self.repo, "--json",
@@ -435,6 +498,20 @@ class GitHubAdapter:
             return f.repo_name
         return None
 
+    def _emergency_barrier(self, capability: str) -> None:
+        """call-11 audit (risk B): барьер Emergency Stop **непосредственно перед**
+        необратимой git/forge-операцией (commit/push/create_pr/merge). Проверки в
+        :meth:`_consume` (в начале) недостаточно: между ней и фактическим syscall
+        остаётся окно. ``emergency.blocks_new_jobs()`` истинно с ПЕРВОГО действия
+        ``engage()`` (in-process ``_ENGAGING`` до durable-commit), поэтому re-check
+        у самой границы гарантирует: либо запись ещё не пересекла необратимую
+        точку, либо Stop уже начался и она **не пересечёт** её."""
+        from . import emergency
+        if emergency.blocks_new_jobs():
+            raise GitContractError(
+                "EMERGENCY_STOP",
+                f"Emergency Stop активен: {capability} остановлен на execution boundary")
+
     def _consume(self, grant_id: str, capability: str, correlation_id: str = "",
                  *, repo: str | None = None, base: str | None = None) -> None:
         """Проверить grant (**авторитетный project** + capability + **точный scope**
@@ -461,13 +538,16 @@ class GitHubAdapter:
                                 project_id=(self.project_id or None), repo=repo, base=base)
         if not dec.permitted:
             raise GitContractError(dec.reason_code, dec.next_action)
-        # call-10 fix (finding 1, TOCTOU): списание с expected_version того же grant,
-        # что прошёл evaluate — revoke/modify между evaluate и consume бампают version
-        # → VERSION_CONFLICT; consume_budget дополнительно атомарно ре-валидирует
-        # state/revoked/expiry/starts_at. Полная авторизация неотделима от списания.
-        ver = autonomy.get_grant(grant_id).get("version")
+        # call-11 audit (risk A, TOCTOU): списываем бюджет строго на ТОЙ ЖЕ version,
+        # что прошла evaluate (dec.version) — НЕ перечитываем более новую версию через
+        # get_grant() после решения (иначе capability/scope, изменившиеся между
+        # evaluate и consume, «оживили» бы устаревшую авторизацию). Любая параллельная
+        # мутация (revoke/consume/modify) бампает version → expected_version не совпадёт
+        # → VERSION_CONFLICT ДО списания и до write/merge; consume_budget дополнительно
+        # атомарно ре-валидирует state/revoked/expiry/starts_at. Авторизация и списание
+        # ссылаются на один снимок — неотделимы.
         try:
-            autonomy.consume_budget(grant_id, n=1, expected_version=ver,
+            autonomy.consume_budget(grant_id, n=1, expected_version=dec.version,
                                     correlation_id=correlation_id)
         except autonomy.BudgetError as exc:
             raise GitContractError("BUDGET_EXHAUSTED", str(exc)) from exc
@@ -480,6 +560,7 @@ class GitHubAdapter:
         audit.record("github.commit.before", f"wt={Path(worktree).name}",
                      correlation_id=correlation_id)
         self._consume(grant_id, "commit", correlation_id)
+        self._emergency_barrier("commit")  # risk B: барьер у необратимой границы
         sha = self.contract.commit(worktree, message, allow_empty=allow_empty)
         audit.record("github.commit.after", f"sha={sha[:12]}", correlation_id=correlation_id)
         return sha
@@ -495,6 +576,7 @@ class GitHubAdapter:
         local_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         audit.record("github.push.before", f"branch={branch} sha={local_sha[:12]}",
                      correlation_id=correlation_id)
+        self._emergency_barrier("push_feature")  # risk B: барьер у необратимой границы
         r = git(worktree, "push", remote, f"HEAD:refs/heads/{branch}")
         if r.returncode != 0:
             raise GitContractError("PUSH_FAILED", redact((r.stderr or r.stdout))[:200])
@@ -513,6 +595,7 @@ class GitHubAdapter:
         audit.record("github.pr.before", f"head={head_branch} base={base}",
                      correlation_id=correlation_id)
         self._consume(grant_id, "create_pr", correlation_id, repo=self._forge_repo(), base=base)
+        self._emergency_barrier("create_pr")  # risk B: барьер у необратимой границы
         pr = self.forge.open_pr(base=base, head_branch=head_branch, head_sha=head_sha,
                                 title=title, body=body)
         audit.record("github.pr.after", f"pr=#{pr.number} state={pr.state}",
@@ -590,13 +673,11 @@ class GitHubAdapter:
         if not (self.forge.mergeability(pr_number) or {}).get("mergeable"):
             raise GitContractError("NOT_MERGEABLE_AT_MERGE",
                                    "PR не mergeable непосредственно перед merge")
-        # call-10 fix (finding 4): Emergency Stop закрывает GitHub execution boundary
-        # НЕПОСРЕДСТВЕННО перед необратимым squash (не только в первичном evaluate).
-        # engage(), начавшийся после gate/consume, останавливает merge.
-        from . import emergency
-        if emergency.blocks_new_jobs():
-            raise GitContractError("EMERGENCY_STOP",
-                                   "Emergency Stop активен: merge запрещён на execution boundary")
+        # call-10 fix (finding 4) + call-11 audit (risk B): Emergency Stop закрывает
+        # GitHub execution boundary НЕПОСРЕДСТВЕННО перед необратимым squash (не только
+        # в первичном evaluate). engage(), начавшийся после gate/consume, останавливает
+        # merge (общий барьер, что и для commit/push/create_pr).
+        self._emergency_barrier("merge")
         # call-10 fix (finding 3): АВТОРИТЕТНАЯ durable delivery-запись пишется ДО
         # необратимого squash (fail-closed: если запись не удалась — merge НЕ
         # исполняется). После merge — идемпотентное завершение до MERGED.

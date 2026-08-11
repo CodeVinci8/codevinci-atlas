@@ -55,6 +55,34 @@ def replay_preview(checkpoint_id: str, req: GrantRef) -> JSONResponse:
                             status_code=409)
 
 
+class ReplayRequest(BaseModel):
+    grant_id: str = ""
+    profile_alias: str | None = None
+    repo: str | None = None  # опциональное ИМЯ repo (owner/name) для сверки со scope;
+    # НЕ filesystem-путь — доверенный checkout выводится из durable-состояния проекта.
+
+
+@router.post("/checkpoints/{checkpoint_id}/replay")
+def replay(checkpoint_id: str, req: ReplayRequest) -> JSONResponse:
+    """call-11 fix (finding 2): ПРОИЗВОДСТВЕННЫЙ replay — создаёт новый Run И
+    материализует новую безопасную ветку из состояния (head_sha) checkpoint (не
+    только preview, не «Run без ветки»). Доверенный checkout-путь выводится из
+    durable Atlas-состояния проекта (Worktree/Project), а НЕ из аргументов каллера.
+    Требует свежий valid grant с repo_write в выведенном scope; Emergency Stop
+    запрещает; source-ветка не переписывается; verify хешей; credentials/transcript
+    не восстанавливаются."""
+    try:
+        res = TM.replay_production(checkpoint_id, grant_id=req.grant_id,
+                                  profile_alias=req.profile_alias, repo=req.repo,
+                                  actor="owner")
+        return JSONResponse({"replay": res})
+    except TM.InvalidCheckpointError as exc:
+        return JSONResponse({"error": {"code": "INVALID_EVIDENCE", "reason": str(exc)}},
+                            status_code=409)
+    except TM.TimeMachineError as exc:
+        return JSONResponse({"error": {"code": exc.code, "reason": exc.message}}, status_code=409)
+
+
 @router.post("/checkpoints/{checkpoint_id}/restore-preview")
 def restore_preview(checkpoint_id: str) -> JSONResponse:
     try:

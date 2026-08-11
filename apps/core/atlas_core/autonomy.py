@@ -137,11 +137,19 @@ class Decision:
     next_action: str
     grant_id: str = ""
     detail: str = ""
+    # call-11 audit (risk A): точный СНИМОК grant, на котором принято решение —
+    # version+content_hash оценённого grant. Потребление бюджета обязано ссылаться
+    # именно на эту version (а не перечитывать более новую после evaluate), иначе
+    # capability/scope могли смениться между авторизацией и списанием. -1 = «не
+    # относится» (deny-решения снимок не несут).
+    version: int = -1
+    content_hash: str = ""
 
     def to_dict(self) -> dict:
         return {"permitted": self.permitted, "reason_code": self.reason_code,
                 "next_action": self.next_action, "grant_id": self.grant_id,
-                "detail": self.detail}
+                "detail": self.detail, "version": self.version,
+                "content_hash": self.content_hash}
 
 
 def default_branch_rules() -> dict:
@@ -442,7 +450,10 @@ def evaluate(capability: str, *, grant_id: str | None = None, project_id: str | 
         return Decision(False, R_BUDGET, next_action(R_BUDGET), grant_id=gid,
                         detail=f"использовано {used_inv}/{max_inv}")
 
-    return Decision(True, R_PERMITTED, next_action(R_PERMITTED), grant_id=gid)
+    # call-11 audit (risk A): решение несёт точный снимок (version+content_hash)
+    # оценённого grant. consume должен списывать бюджет именно на эту version.
+    return Decision(True, R_PERMITTED, next_action(R_PERMITTED), grant_id=gid,
+                    version=g["version"], content_hash=g["content_hash"])
 
 
 def _mark_expired(grant_id: str) -> None:

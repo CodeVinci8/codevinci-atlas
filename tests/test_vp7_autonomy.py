@@ -436,6 +436,211 @@ class TestGithubAdapter(VP7Base):
         f5 = FakeGh([], {"mergeable": "MERGEABLE", "state": "OPEN", "mergeStateStatus": "CLEAN"})
         self.assertTrue(f5.mergeability(1)["mergeable"])
 
+    # --- call-11 audit (risk A): списание бюджета на ТОЙ ЖЕ version, что evaluate ---
+    def test_consume_uses_evaluated_version_snapshot_no_toctou(self):
+        """Между evaluate() и consume grant меняется (version бампается конкурентным
+        consume при state=ACTIVE). Снимок dec.version устаревает → списание падает
+        VERSION_CONFLICT ДО write; ветка на remote не создаётся. Проверяет именно
+        снимок version (а не перечитанную более новую версию)."""
+        from atlas_core import autonomy
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        self._feature()  # локальный commit (enforce_grant=False); ветка НЕ push-нута
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+        real_eval = autonomy.evaluate
+
+        def eval_then_mutate(*a, **k):
+            dec = real_eval(*a, **k)
+            if dec.permitted:  # КОНКУРЕНТНАЯ мутация после решения (version → +1, ACTIVE)
+                autonomy.consume_budget(g["id"], n=1, expected_version=dec.version)
+            return dec
+
+        autonomy.evaluate = eval_then_mutate
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        finally:
+            autonomy.evaluate = real_eval
+        self.assertIn(cm.exception.code, ("VERSION_CONFLICT", "GRANT_CONFLICT"))
+        self.assertFalse(self.forge.branch_exists("atlas/vp-7-x"))  # push не произошёл
+
+    def test_consume_denies_when_grant_revoked_between_eval_and_consume(self):
+        """Отзыв (снятие всего scope) между evaluate и consume → write не исполняется."""
+        from atlas_core import autonomy
+        from atlas_core.autonomy import create_grant, revoke_grant
+        from atlas_core.github_adapter import GitContractError
+        self._feature()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+        real_eval = autonomy.evaluate
+
+        def eval_then_revoke(*a, **k):
+            dec = real_eval(*a, **k)
+            if dec.permitted:
+                revoke_grant(g["id"], expected_version=dec.version)
+            return dec
+
+        autonomy.evaluate = eval_then_revoke
+        try:
+            with self.assertRaises(GitContractError):
+                prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        finally:
+            autonomy.evaluate = real_eval
+        self.assertFalse(self.forge.branch_exists("atlas/vp-7-x"))
+
+    # --- call-11 audit (risk B): барьер Emergency Stop у необратимой forge-границы ---
+    def _patch_emergency_after_consume(self):
+        """Патчит emergency.blocks_new_jobs: False на 1-м вызове (_consume проходит,
+        бюджет спишется), True далее (барьер у границы) — эмулирует engage(), начатый
+        в окне между consume и необратимой операцией. Возвращает (restore, calls)."""
+        from atlas_core import emergency
+        calls = {"n": 0}
+        real = emergency.blocks_new_jobs
+
+        def patched():
+            calls["n"] += 1
+            return calls["n"] > 1
+
+        emergency.blocks_new_jobs = patched
+
+        def restore():
+            emergency.blocks_new_jobs = real
+
+        return restore, calls
+
+    def test_emergency_barrier_blocks_push_after_consume(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        self._feature()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+        restore, calls = self._patch_emergency_after_consume()
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.push_feature(self.wc, "atlas/vp-7-x", grant_id=g["id"])
+        finally:
+            restore()
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        self.assertFalse(self.forge.branch_exists("atlas/vp-7-x"))  # push не пересёк границу
+        self.assertGreaterEqual(calls["n"], 2)  # был ВТОРОЙ (барьерный) чек после consume
+
+    def test_emergency_barrier_blocks_commit_after_consume(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-c"],
+                       capture_output=True)
+        Path(self.wc, "cf.py").write_text("z=1")
+        head0 = subprocess.run(["git", "-C", self.wc, "rev-parse", "HEAD"],
+                               capture_output=True, text=True).stdout.strip()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["commit"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="c")
+        restore, calls = self._patch_emergency_after_consume()
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.commit(self.wc, "VP-7: изменение", grant_id=g["id"])
+        finally:
+            restore()
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        head1 = subprocess.run(["git", "-C", self.wc, "rev-parse", "HEAD"],
+                               capture_output=True, text=True).stdout.strip()
+        self.assertEqual(head0, head1)  # коммит не создан
+
+    def test_emergency_barrier_blocks_create_pr_after_consume(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha = self._feature()
+        self.ad.push_feature(self.wc, "atlas/vp-7-x")  # push без emergency (enforce_grant=False)
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["create_pr"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="pr")
+        restore, calls = self._patch_emergency_after_consume()
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.create_pr(base="main", head_branch="atlas/vp-7-x", head_sha=sha,
+                               title="VP-7 демо", body="тело", grant_id=g["id"])
+        finally:
+            restore()
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        self.assertIsNone(self.forge.get_pr(1))  # PR не создан
+
+    def test_emergency_barrier_blocks_merge_after_consume(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        restore, calls = self._patch_emergency_after_consume()
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.merge_pull_request(project_id="p", review_package_id=rp,
+                                        quality_report_id=qr, pr_number=prn, expected_head=sha,
+                                        grant_id=g["id"], base="main")
+        finally:
+            restore()
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # merge не пересёк границу
+
+    # --- call-11 audit (risk C): явная политика обязательных CI-контекстов ---
+    def test_required_check_contexts_enforced(self):
+        from atlas_core.github_adapter import classify_check_runs
+        req = {"Python (lint, tests, migrations)", "Web (typecheck, i18n, build)",
+               "Core image (fresh-session consumer в образе)", "Секрет-скан"}
+
+        def run(name, concl, status="completed"):
+            return {"name": name, "status": status, "conclusion": concl}
+
+        full = [run(n, "success") for n in req]
+        self.assertEqual(classify_check_runs(full, req)["state"], "GREEN")
+        # одной обязательной job нет → FAILING + missing
+        miss = classify_check_runs([r for r in full if r["name"] != "Секрет-скан"], req)
+        self.assertEqual(miss["state"], "FAILING")
+        self.assertIn("Секрет-скан", miss["missing"])
+        # зелена лишь ПОСТОРОННЯЯ job → FAILING (обязательные отсутствуют)
+        self.assertEqual(classify_check_runs([run("unrelated", "success")], req)["state"],
+                         "FAILING")
+        # дубли push+PR одной обязательной job не ломают счёт → GREEN
+        self.assertEqual(classify_check_runs(full + full, req)["state"], "GREEN")
+        # обязательная job pending → PENDING (head не устоялся)
+        pend = [r for r in full if r["name"] != "Секрет-скан"] + \
+            [run("Секрет-скан", None, status="in_progress")]
+        self.assertEqual(classify_check_runs(pend, req)["state"], "PENDING")
+        # обязательная job skipped/neutral НЕ засчитывается как success → FAILING
+        for bad_concl in ("skipped", "neutral"):
+            mixed = [r for r in full if r["name"] != "Секрет-скан"] + \
+                [run("Секрет-скан", bad_concl)]
+            self.assertEqual(classify_check_runs(mixed, req)["state"], "FAILING")
+
+    def test_ghforge_applies_atlas_required_policy_for_prod_repo(self):
+        from atlas_core.github_adapter import ATLAS_REPO, GhForge
+
+        class FakeGh(GhForge):
+            def __init__(self, repo, runs):
+                super().__init__(repo)
+                self._runs = runs
+
+            def _gh(self, *args, **kw):
+                import json as _j
+
+                class R:
+                    returncode = 0
+                out = R()
+                out.stdout = _j.dumps(self._runs)
+                out.stderr = ""
+                return out
+
+        one_success = [{"name": "x", "status": "completed", "conclusion": "success"}]
+        # production-repo Atlas: одиночный посторонний success НЕ зелёный (нужны required).
+        self.assertEqual(FakeGh(ATLAS_REPO, one_success).checks("h")["state"], "FAILING")
+        # произвольный repo без политики: legacy — одиночный success зелёный.
+        self.assertEqual(FakeGh("a/b", one_success).checks("h")["state"], "GREEN")
+
     # --- call-9 fix (finding 2): реальный merge пишет durable delivery-историю ---
     def test_merge_records_authoritative_delivery(self):
         from atlas_core.autonomy import create_grant
@@ -991,6 +1196,179 @@ class TestTimeMachine(VP7Base):
         blob = json.dumps(self._ckpt()).lower()
         for marker in ("@", "token", "cookie", "password", "transcript", "/home/", "/root/"):
             self.assertNotIn(marker, blob)
+
+    def _repo_with_base_head(self):
+        d = tempfile.mkdtemp(prefix="atlas-tm-")
+        repo = str(Path(d) / "repo")
+        os.makedirs(repo)
+        subprocess.run(["git", "-C", repo, "init", "-q", "-b", "main"], capture_output=True)
+        for k, v in (("user.name", "CodeVinci"), ("user.email", "c@example.invalid")):
+            subprocess.run(["git", "-C", repo, "config", k, v], capture_output=True)
+        Path(repo, "a").write_text("1")
+        subprocess.run(["git", "-C", repo, "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "b"], capture_output=True)
+        base = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True,
+                              text=True).stdout.strip()
+        subprocess.run(["git", "-C", repo, "checkout", "-qb", "atlas/vp-7-src"], capture_output=True)
+        Path(repo, "checkpoint_file").write_text("2")
+        subprocess.run(["git", "-C", repo, "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "w"], capture_output=True)
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True,
+                              text=True).stdout.strip()
+        return repo, base, head
+
+    # --- call-11 fix (finding 1): replay воспроизводит СОСТОЯНИЕ checkpoint (head) ---
+    def test_replay_reproduces_checkpoint_head_state(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import replay
+        repo, base, head = self._repo_with_base_head()
+        cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        # новая ветка указывает на head_sha checkpoint (не baseline).
+        new_head = subprocess.run(["git", "-C", repo, "rev-parse", res["new_branch"]],
+                                  capture_output=True, text=True).stdout.strip()
+        self.assertEqual(new_head, head)   # состояние checkpoint, не base
+        # и содержит файл, добавленный в checkpoint (изменения base..head сохранены).
+        ls = subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", res["new_branch"]],
+                            capture_output=True, text=True).stdout
+        self.assertIn("checkpoint_file", ls)
+
+    # --- call-11 fix (finding 4): повторный replay → уникальная ветка + новый Run ---
+    def test_repeated_replay_distinct_branch_and_run(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import replay
+        repo, base, head = self._repo_with_base_head()
+        cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        r1 = replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        r2 = replay(cp["id"], grant_id=g["id"], repo_path=repo)  # не падает на существующей ветке
+        self.assertNotEqual(r1["new_branch"], r2["new_branch"])   # уникальные ветки
+        self.assertNotEqual(r1["new_run_id"], r2["new_run_id"])   # разные Run
+
+    # --- call-11 fix (finding 3): compare верифицирует checkpoints (tamper → INVALID) ---
+    def test_compare_rejects_tampered_checkpoint(self):
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint
+        from atlas_core.timemachine import InvalidCheckpointError, compare
+        a = self._ckpt(head_sha="H1")
+        b = self._ckpt(head_sha="H2")
+        compare(a["id"], b["id"])  # валидные — ок
+        with session_scope() as s:
+            s.get(Checkpoint, a["id"]).head_sha = "TAMPERED"
+            s.commit()
+        with self.assertRaises(InvalidCheckpointError):   # изменённый → fail-closed
+            compare(a["id"], b["id"])
+
+    # --- call-11 audit (finding 2): production HTTP replay материализует ветку ---
+    def test_replay_production_http_endpoint(self):
+        """POST /replay через реальный FastAPI: доверенный checkout выводится из
+        durable-состояния (Worktree), создаётся новый Run И материализуется ветка
+        в состоянии checkpoint; повтор → новые ветка/Run; source не переписан;
+        подделанный evidence и Emergency Stop → отказ без ветки/Run."""
+        from atlas_core import emergency
+        from atlas_core.app import create_app
+        from atlas_core.autonomy import create_grant
+        from atlas_core.db import session_scope
+        from atlas_core.ids import new_id
+        from atlas_core.orm import Checkpoint, Project, Run, Worktree
+        from atlas_core.settings import load_settings
+        from sqlalchemy import select
+        from starlette.testclient import TestClient
+
+        repo, base, head = self._repo_with_base_head()
+        with session_scope() as s:  # durable project (github-source) + активный Worktree
+            s.add(Project(id="p", name="demo", source_kind="github",
+                          source_location="https://example.invalid/a/b", source_ref="a/b",
+                          status="connected"))
+            s.add(Worktree(id=new_id("wt"), project_id="p", branch="atlas/vp-7-src",
+                           path=repo, status="active"))
+            s.commit()
+        cp = self._ckpt(project_id="p", branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="replay")
+        client = TestClient(create_app(load_settings()))
+
+        def _count_runs():
+            with session_scope() as s:
+                return len(s.execute(select(Run).where(Run.project_id == "p")).scalars().all())
+
+        def _replay_branches():
+            r = subprocess.run(["git", "-C", repo, "branch", "--list", "atlas/replay-*"],
+                               capture_output=True, text=True)
+            return {x.strip("* ").strip() for x in r.stdout.splitlines() if x.strip()}
+
+        def _rev(ref):
+            return subprocess.run(["git", "-C", repo, "rev-parse", ref],
+                                  capture_output=True, text=True).stdout.strip()
+
+        runs0 = _count_runs()
+        # (1)+(2)+(3) валидный checkpoint + свежий grant → POST → distinct Run
+        r1 = client.post(f"/api/v1/checkpoints/{cp['id']}/replay", json={"grant_id": g["id"]})
+        self.assertEqual(r1.status_code, 200, r1.text)
+        b1 = r1.json()["replay"]["new_branch"]
+        self.assertEqual(_count_runs(), runs0 + 1)              # (3) новый Run создан
+        # (4)+(5)+(6) реальная ветка в доверенном repo, состояние head + файл checkpoint
+        self.assertIn(b1, _replay_branches())                  # (4) ветка создана
+        self.assertEqual(_rev(b1), head)                       # (5) ветка == head_sha
+        ls = subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", b1],
+                            capture_output=True, text=True).stdout
+        self.assertIn("checkpoint_file", ls)                   # (6) изменение base..head есть
+        # (7) второй replay → другая ветка + другой Run
+        r2 = client.post(f"/api/v1/checkpoints/{cp['id']}/replay", json={"grant_id": g["id"]})
+        self.assertEqual(r2.status_code, 200, r2.text)
+        b2 = r2.json()["replay"]["new_branch"]
+        self.assertNotEqual(b1, b2)
+        self.assertEqual(_count_runs(), runs0 + 2)
+        self.assertNotEqual(r1.json()["replay"]["new_run_id"], r2.json()["replay"]["new_run_id"])
+        # (8) source-ветка не переписана
+        self.assertEqual(_rev("atlas/vp-7-src"), head)
+        # (9) подделанный checkpoint → отказ INVALID_EVIDENCE
+        with session_scope() as s:
+            s.get(Checkpoint, cp["id"]).head_sha = "TAMPERED"
+            s.commit()
+        r3 = client.post(f"/api/v1/checkpoints/{cp['id']}/replay", json={"grant_id": g["id"]})
+        self.assertEqual(r3.status_code, 409)
+        self.assertEqual(r3.json()["error"]["code"], "INVALID_EVIDENCE")
+        # (10) Emergency Stop блокирует без создания ветки и Run
+        cp2 = self._ckpt(project_id="p", branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        runs_pre, br_pre = _count_runs(), _replay_branches()
+        emergency.engage(reason="stop", actor="owner")
+        try:
+            r4 = client.post(f"/api/v1/checkpoints/{cp2['id']}/replay", json={"grant_id": g["id"]})
+        finally:
+            emergency.resume(actor="owner")
+        self.assertEqual(r4.status_code, 409)
+        self.assertEqual(r4.json()["error"]["code"], "EMERGENCY_STOP")
+        self.assertEqual(_count_runs(), runs_pre)              # Run не создан
+        self.assertEqual(_replay_branches(), br_pre)          # ветка не создана
+
+    def test_replay_production_no_trusted_checkout_fails_closed(self):
+        """finding 2: без доверенного checkout (нет Worktree/local_git) endpoint НЕ
+        создаёт Run — fail-closed, а не «Run без ветки»."""
+        from atlas_core.app import create_app
+        from atlas_core.autonomy import create_grant
+        from atlas_core.settings import load_settings
+        from starlette.testclient import TestClient
+
+        cp = self._ckpt(project_id="p-nowt", branch="atlas/vp-7-src")
+        g = create_grant(project_id="p-nowt", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        client = TestClient(create_app(load_settings()))
+        resp = client.post(f"/api/v1/checkpoints/{cp['id']}/replay", json={"grant_id": g["id"]})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["error"]["code"], "NO_TRUSTED_CHECKOUT")
+
+    def test_replay_preview_shows_pattern_not_exact_branch(self):
+        """finding 2: preview показывает ПАТТЕРН ветки, не конкретное случайное имя,
+        которое реальный replay не использует (согласованность UI/API-истины)."""
+        from atlas_core.timemachine import replay_preview
+        cp = self._ckpt()
+        prev = replay_preview(cp["id"])
+        self.assertNotIn("target_branch", prev)                # нет обещания точного имени
+        self.assertIn("<уникальный-токен>", prev["target_branch_pattern"])
 
     def test_replay_new_run_safe_branch_no_rewrite(self):
         from atlas_core.autonomy import create_grant

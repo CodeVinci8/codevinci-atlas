@@ -52,9 +52,19 @@
   с тестами. call **9** (head `515acb0`, codex-plus-02, т.к. codex-plus-01 исчерпан
   0%) → genuine **REVISE** (Emergency TOCTOU; github_deliveries не писалась реальным
   merge) → исправлено (engage _ENGAGING-флаг + re-check после регистрации job;
-  merge_pull_request пишет authoritative delivery) с тестами. Лимит на число
-  Reviewer-вызовов снят владельцем (последовательно до PASS). call-7/8/9 immutable,
-  не переименовываются в PASS.
+  merge_pull_request пишет authoritative delivery) с тестами. call **10** (head
+  `896cc9b`, codex-plus-01) → genuine **REVISE** (grant consume TOCTOU; строгость
+  checks/mergeability; durability delivery до squash; Emergency у merge-boundary) →
+  исправлено `2f54e39`/`896cc9b` с тестами. call **11** (head `2d13d04`,
+  codex-plus-02) → genuine **REVISE** (4 находки Time Machine: replay не
+  воспроизводил head-состояние; replay не подключён к production API; compare не
+  верифицировал checkpoints; повторный replay мог конфликтовать по ветке/Run) →
+  исправлено с тестами; дополнительно закрыты 3 остаточных риска перед call-12
+  (grant version-snapshot, Emergency-барьер у каждой forge-границы, явная политика
+  обязательных CI-контекстов) + production HTTP replay через доверенный checkout из
+  durable-состояния. Лимит на число Reviewer-вызовов снят владельцем
+  (последовательно до PASS). call-7…11 immutable, не переименовываются в PASS;
+  следующий подлинный вызов — **call 12** (лимиты Codex сброшены владельцем).
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

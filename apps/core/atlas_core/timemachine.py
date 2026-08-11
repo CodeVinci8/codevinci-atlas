@@ -178,9 +178,51 @@ def _grant_is_fresh(grant_id: str) -> tuple[bool, str]:
 
 
 def _safe_replay_branch(source_branch: str, checkpoint_id: str) -> str:
-    """Безопасное имя новой feature-ветки для replay (§21). Никогда не source."""
-    token = checkpoint_id.split("_")[-1][:6].lower() or new_id("x").split("_")[-1][:6].lower()
-    return f"atlas/replay-{token}"
+    """Безопасное УНИКАЛЬНОЕ имя новой feature-ветки для replay (§21). Никогда не
+    source. call-11 fix (finding 4): каждый replay одного checkpoint получает НОВУЮ
+    ветку (свежий token), поэтому повторный replay не падает на существующей ветке
+    и создаёт новый Run/безопасную ветку по контракту."""
+    import uuid
+    ck = checkpoint_id.split("_")[-1][:6].lower()
+    uniq = uuid.uuid4().hex[:8]  # энтропийный токен на каждый replay (без коллизий)
+    return f"atlas/replay-{ck}-{uniq}"
+
+
+def _replay_branch_pattern(checkpoint_id: str) -> str:
+    """Паттерн имени replay-ветки для preview (не конкретное случайное имя). call-11
+    audit (finding 2): реальный replay берёт свежий уникальный token на каждый вызов,
+    поэтому preview НЕ должен обещать точное имя, которое реальный replay не
+    использует — показываем стабильный паттерн, согласованный с UI/API."""
+    ck = checkpoint_id.split("_")[-1][:6].lower()
+    return f"atlas/replay-{ck}-<уникальный-токен>"
+
+
+def _trusted_repo_path(project_id: str | None) -> str | None:
+    """Доверенный локальный checkout/worktree-путь проекта из **durable Atlas-
+    состояния** (§13.4/§35), НЕ из аргументов каллера (call-11 audit, finding 2):
+    активный Worktree проекта, иначе canonical ``source_location`` для local_git.
+    Путь обязан быть git-репозиторием; иначе None → replay fail-closed (не создаёт
+    Run без материализации ветки)."""
+    if not project_id:
+        return None
+    from .orm import Project, Worktree
+    path: str | None = None
+    with session_scope() as s:
+        wt = s.execute(
+            select(Worktree)
+            .where(Worktree.project_id == project_id, Worktree.status == "active")
+            .order_by(Worktree.created_at.desc())).scalars().first()
+        if wt is not None and wt.path:
+            path = wt.path
+        else:
+            p = s.get(Project, project_id)
+            if p is not None and p.source_kind == "local_git" and p.source_location:
+                path = p.source_location
+    if not path:
+        return None
+    # Валидируем, что путь — рабочее git-дерево (без этого branch-материализация
+    # невозможна; лучше явный отказ, чем «Run без ветки»).
+    return path if _git(path, "rev-parse", "--git-dir").returncode == 0 else None
 
 
 def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = None,
@@ -256,10 +298,23 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     source_head_before = None
     if repo_path:
         source_head_before = _git_head(repo_path, cp["branch"])
-        base = cp["base_sha"] or cp["head_sha"]
-        r = _git(repo_path, "branch", new_branch, base)
+        # call-11 fix (finding 1): воспроизводим СОСТОЯНИЕ checkpoint (head_sha), а не
+        # baseline. Ветка создаётся от head_sha — иначе изменения base..head теряются
+        # и replay давал бы baseline-ветку. head_sha пуст/недоступен в репо →
+        # fail-closed (не «тихо» baseline).
+        target = cp["head_sha"] or cp["base_sha"]
+        if not target:
+            raise TimeMachineError("CHECKPOINT_NO_HEAD",
+                                   "checkpoint без head_sha — состояние не воспроизводимо")
+        r = _git(repo_path, "branch", new_branch, target)
         if r.returncode != 0:
             raise TimeMachineError("BRANCH_FAILED", redact((r.stderr or r.stdout))[:160])
+        # Проверяем, что новая ветка указывает именно на состояние checkpoint (head_sha).
+        if cp["head_sha"]:
+            new_head = _git_head(repo_path, new_branch)
+            if new_head and new_head != cp["head_sha"]:
+                raise TimeMachineError("REPLAY_STATE_MISMATCH",
+                                       "новая ветка не соответствует head_sha checkpoint")
         source_head_after = _git_head(repo_path, cp["branch"])
         if source_head_before is not None and source_head_after != source_head_before:
             raise TimeMachineError("SOURCE_REWRITTEN", "source-ветка была изменена — откат")
@@ -280,16 +335,43 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     }
 
 
+def replay_production(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = None,
+                      repo: str | None = None, actor: str = "owner",
+                      correlation_id: str = "") -> dict:
+    """ПРОИЗВОДСТВЕННЫЙ replay для HTTP-границы (call-11 audit, finding 2). Доверенный
+    checkout-путь **выводится из durable Atlas-состояния** проекта checkpoint
+    (:func:`_trusted_repo_path`), а НЕ из аргументов каллера — поэтому endpoint не
+    принимает произвольный filesystem-путь. Материализует новую git-ветку из
+    head_sha checkpoint **и** создаёт новый Run (не «Run без ветки»); fail-closed,
+    если доверенный checkout не выводим."""
+    cp = get_checkpoint(checkpoint_id)  # verify выполнит replay(); нам нужен project_id
+    if cp is None:
+        raise TimeMachineError("NOT_FOUND", "checkpoint не найден")
+    trusted_path = _trusted_repo_path(cp.get("project_id"))
+    if not trusted_path:
+        raise TimeMachineError(
+            "NO_TRUSTED_CHECKOUT",
+            "доверенный checkout проекта не выводим из durable-состояния — "
+            "replay не создаёт Run без материализации ветки")
+    return replay(checkpoint_id, grant_id=grant_id, profile_alias=profile_alias,
+                  repo_path=trusted_path, repo=repo, actor=actor,
+                  correlation_id=correlation_id)
+
+
 def replay_preview(checkpoint_id: str, *, grant_id: str = "",
                    profile_alias: str | None = None) -> dict:
-    """Read-only превью replay (ничего не создаёт): verify + целевая безопасная
-    ветка + свежесть grant. Для Web «replay preview»."""
+    """Read-only превью replay (ничего не создаёт): verify + целевой безопасный
+    паттерн ветки + свежесть grant. Для Web «replay preview».
+
+    call-11 audit (finding 2): показываем ``target_branch_pattern`` (паттерн), а не
+    конкретное случайное имя — реальный replay выберет свежий уникальный token, и
+    обещать точное имя здесь означало бы рассинхронизацию UI/API-истины."""
     cp = _verify_or_raise(checkpoint_id)
-    new_branch = _safe_replay_branch(cp["branch"], checkpoint_id)
+    pattern = _replay_branch_pattern(checkpoint_id)
     fresh, why = (_grant_is_fresh(grant_id) if grant_id else (False, "NO_GRANT"))
     return {
         "read_only": True, "checkpoint_id": checkpoint_id, "verified_hashes": True,
-        "source_branch": cp["branch"], "target_branch": new_branch,
+        "source_branch": cp["branch"], "target_branch_pattern": pattern,
         "creates_new_run": True, "rewrites_source": False,
         "grant_id": grant_id, "grant_fresh": fresh,
         "blocker": ("" if fresh else why),
@@ -330,11 +412,13 @@ def resume(checkpoint_id: str, *, grant_id: str = "", correlation_id: str = "") 
 
 def compare(cp_a: str, cp_b: str) -> dict:
     """Сравнить два checkpoint. Показывает факт-различия §21: SHA, grant,
-    profile/model, artifacts, test/evidence, outcome(cause)."""
-    a = get_checkpoint(cp_a)
-    b = get_checkpoint(cp_b)
-    if a is None or b is None:
-        raise TimeMachineError("NOT_FOUND", "checkpoint не найден")
+    profile/model, artifacts, test/evidence, outcome(cause).
+
+    call-11 fix (finding 3): ОБА checkpoint верифицируются (content-hash) через
+    _verify_or_raise — изменённый checkpoint не принимается как источник сравнения
+    (fail-closed: tampered → INVALID_EVIDENCE), а не читается как валидный."""
+    a = _verify_or_raise(cp_a)
+    b = _verify_or_raise(cp_b)
 
     def _art_set(d):
         return {(x.get("path"), x.get("sha")) for x in d.get("artifact_hashes", [])}
