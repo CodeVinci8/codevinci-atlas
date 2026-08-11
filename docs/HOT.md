@@ -66,9 +66,12 @@
   (последовательно до PASS). call **12** (head `a15bd87`, codex-plus-01) → genuine
   **REVISE** (4 находки: local_git replay без workspace-scope; compare endpoint не
   маппил InvalidCheckpointError→INVALID_EVIDENCE; Web не подключён к production
-  replay; replay при пустом head_sha не fail-closed) → исправлено с тестами. call-7…12
-  immutable, не переименовываются в PASS; следующий подлинный вызов — **call 13** по
-  исправленному зелёному head.
+  replay; replay при пустом head_sha не fail-closed) → исправлено с тестами. call **13**
+  (head `14a2da9`, codex-plus-02) → genuine **REVISE** (3 находки: commit/push не
+  энфорсили workspace-scope checkout; squash-merge без `--match-head-commit` — TOCTOU
+  current-head; Emergency-окно между первым барьером и squash из-за durable
+  record_delivery) → исправлено с тестами. call-7…13 immutable, не переименовываются
+  в PASS; следующий подлинный вызов — **call 14** по исправленному зелёному head.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

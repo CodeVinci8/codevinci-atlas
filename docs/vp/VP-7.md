@@ -275,8 +275,22 @@ fail-closed `CHECKPOINT_NO_HEAD`. **Fix:** для local_git replay энфорс�
 `timemachine.tsx` (RU/EN); `replay()` fail-closed `CHECKPOINT_NO_HEAD` при пустом
 head_sha ДО создания ветки/Run. Регрессия **432 OK**; acceptance 34/34; Web i18n
 736/736 + tsc + build; Chrome 50/50 (39 PNG); секрет-скан ЧИСТО; живая БД остаётся
-`0006`. call-7…12 immutable. NEXT: **call 13** по исправленному зелёному head; при
-genuine PASS — merge/backup/миграция/deploy/truth-sync.
+`0006`. call-7…12 immutable.
+
+### call 13 — genuine REVISE (head `14a2da9`, codex-plus-02)
+
+Три находки: (1, критично) `GitHubAdapter.commit`/`push_feature` не энфорсили
+workspace-scope — grant нужного project_id разрешал write из ПРОИЗВОЛЬНОГО
+caller-supplied worktree; (2, критично) `GhForge.squash_merge` не передавал
+`--match-head-commit` — commit между чтением head и squash был бы слит без PASS/CI
+для нового SHA; (3, высокий) окно Emergency Stop между первым барьером и squash
+из-за durable `record_delivery`. **Fix:** commit/push передают `workspace=worktree`
+в evaluate (fail-closed `WORKSPACE_NOT_ALLOWED`); squash-merge с
+`--match-head-commit <expected_head>` (атомарная current-head гарантия); повторный
+барьер Emergency НЕПОСРЕДСТВЕННО перед squash. Регрессия **435 OK**; acceptance
+34/34; Web i18n 736/736 + tsc + build; Chrome 50/50 (39 PNG); секрет-скан ЧИСТО;
+живая БД остаётся `0006`. call-7…13 immutable. NEXT: **call 14** по исправленному
+зелёному head; при genuine PASS — merge/backup/миграция/deploy/truth-sync.
 
 ## Границы (не VP-8/VP-9)
 

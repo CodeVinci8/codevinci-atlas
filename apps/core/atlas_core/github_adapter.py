@@ -441,9 +441,18 @@ class GhForge:
             raise GitContractError("PR_NOT_FOUND", f"PR #{number} не найден")
         if pr.head_sha != expected_head:
             raise GitContractError("STALE_HEAD", f"head изменился: ожидался {expected_head[:12]}")
-        r = self._gh("pr", "merge", str(number), "--repo", self.repo, "--squash")
+        # call-13 fix (finding 2): АТОМАРНАЯ гарантия current-head. --match-head-commit
+        # заставляет GitHub отклонить merge, если head PR сместился между чтением и
+        # squash — иначе новый commit без PASS/CI для нового SHA был бы слит (TOCTOU,
+        # который отдельная проверка expected_head не закрывает).
+        r = self._gh("pr", "merge", str(number), "--repo", self.repo, "--squash",
+                     "--match-head-commit", expected_head)
         if r.returncode != 0:
-            raise GitContractError("MERGE_FAILED", redact(r.stderr)[:200])
+            # Смещение head → gh возвращает ошибку; переводим в стабильный STALE_HEAD.
+            err = redact(r.stderr)[:200]
+            code = "STALE_HEAD_AT_MERGE" if "head" in err.lower() or "match" in err.lower() \
+                else "MERGE_FAILED"
+            raise GitContractError(code, err)
         return {"merged": True, "number": number}
 
 
@@ -513,7 +522,8 @@ class GitHubAdapter:
                 f"Emergency Stop активен: {capability} остановлен на execution boundary")
 
     def _consume(self, grant_id: str, capability: str, correlation_id: str = "",
-                 *, repo: str | None = None, base: str | None = None) -> None:
+                 *, repo: str | None = None, base: str | None = None,
+                 workspace: str | None = None) -> None:
         """Проверить grant (**авторитетный project** + capability + **точный scope**
         repo/base) и списать invocation-бюджет за реальную write/merge-операцию
         (VP-7 D-fix + Fix2). Fail-closed: отсутствующий/исчерпанный/несоответствующий
@@ -534,8 +544,13 @@ class GitHubAdapter:
                     f"операция {capability} требует явный grant (capability+scope+budget)")
             return  # только явная test-only граница (enforce_grant=False)
         from . import autonomy
+        # call-13 fix (finding 1): для локальных write-границ (commit/push из checkout)
+        # передаём workspace — grant обязан ЯВНО перечислять этот worktree в
+        # workspace_allowlist. Иначе grant нужного project_id разрешил бы commit/push
+        # из ПРОИЗВОЛЬНОГО caller-supplied worktree (fail-closed exact-scope нарушен).
         dec = autonomy.evaluate(capability, grant_id=grant_id,
-                                project_id=(self.project_id or None), repo=repo, base=base)
+                                project_id=(self.project_id or None), repo=repo, base=base,
+                                workspace=workspace)
         if not dec.permitted:
             raise GitContractError(dec.reason_code, dec.next_action)
         # call-11 audit (risk A, TOCTOU): списываем бюджет строго на ТОЙ ЖЕ version,
@@ -559,7 +574,8 @@ class GitHubAdapter:
                grant_id: str = "", correlation_id: str = "") -> str:
         audit.record("github.commit.before", f"wt={Path(worktree).name}",
                      correlation_id=correlation_id)
-        self._consume(grant_id, "commit", correlation_id)
+        # call-13 fix (finding 1): worktree — авторитетный workspace для commit-scope.
+        self._consume(grant_id, "commit", correlation_id, workspace=worktree)
         self._emergency_barrier("commit")  # risk B: барьер у необратимой границы
         sha = self.contract.commit(worktree, message, allow_empty=allow_empty)
         audit.record("github.commit.after", f"sha={sha[:12]}", correlation_id=correlation_id)
@@ -572,7 +588,10 @@ class GitHubAdapter:
         self.contract.assert_feature_branch(branch)
         if force:
             raise self.contract.reject_force()
-        self._consume(grant_id, "push_feature", correlation_id, repo=self._forge_repo())
+        # call-13 fix (finding 1): worktree — авторитетный workspace для push-scope
+        # (repo-имя forge проверяется отдельно; здесь — принадлежность checkout grant).
+        self._consume(grant_id, "push_feature", correlation_id, repo=self._forge_repo(),
+                      workspace=worktree)
         local_sha = git(worktree, "rev-parse", "HEAD").stdout.strip()
         audit.record("github.push.before", f"branch={branch} sha={local_sha[:12]}",
                      correlation_id=correlation_id)
@@ -696,6 +715,11 @@ class GitHubAdapter:
         except Exception as exc:  # noqa: BLE001 — нет durable outbox → НЕ мержим
             raise GitContractError("DELIVERY_RECORD_FAILED",
                                    "не удалось durable-зафиксировать доставку до merge") from exc
+        # call-13 fix (finding 3): ПОВТОРНЫЙ барьер Emergency Stop НЕПОСРЕДСТВЕННО перед
+        # squash — record_delivery (SQLite/retry) выше вносит задержку, в течение которой
+        # мог начаться Stop; первый барьер (до delivery) её не покрывает. Здесь окно до
+        # необратимого squash минимально.
+        self._emergency_barrier("merge")
         audit.record("github.merge.before", f"pr=#{pr_number} head={expected_head[:12]}",
                      correlation_id=correlation_id)
         res = self.forge.squash_merge(pr_number, expected_head=expected_head, message=msg,

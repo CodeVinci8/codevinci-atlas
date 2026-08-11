@@ -448,7 +448,8 @@ class TestGithubAdapter(VP7Base):
         self._feature()  # локальный commit (enforce_grant=False); ветка НЕ push-нута
         prod = self._prod("p")
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
-                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc], reason="p")
         real_eval = autonomy.evaluate
 
         def eval_then_mutate(*a, **k):
@@ -474,7 +475,8 @@ class TestGithubAdapter(VP7Base):
         self._feature()
         prod = self._prod("p")
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
-                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc], reason="p")
         real_eval = autonomy.evaluate
 
         def eval_then_revoke(*a, **k):
@@ -517,7 +519,8 @@ class TestGithubAdapter(VP7Base):
         self._feature()
         prod = self._prod("p")
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
-                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="p")
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc], reason="p")
         restore, calls = self._patch_emergency_after_consume()
         try:
             with self.assertRaises(GitContractError) as cm:
@@ -538,7 +541,8 @@ class TestGithubAdapter(VP7Base):
                                capture_output=True, text=True).stdout.strip()
         prod = self._prod("p")
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["commit"],
-                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="c")
+                         allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc], reason="c")
         restore, calls = self._patch_emergency_after_consume()
         try:
             with self.assertRaises(GitContractError) as cm:
@@ -640,6 +644,86 @@ class TestGithubAdapter(VP7Base):
         self.assertEqual(FakeGh(ATLAS_REPO, one_success).checks("h")["state"], "FAILING")
         # произвольный repo без политики: legacy — одиночный success зелёный.
         self.assertEqual(FakeGh("a/b", one_success).checks("h")["state"], "GREEN")
+
+    # --- call-13 fix (finding 1): commit/push требуют workspace-scope checkout ---
+    def test_local_write_requires_workspace_scope(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        prod = self._prod("p")
+        subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-ws"],
+                       capture_output=True)
+        Path(self.wc, "w.py").write_text("w=1")
+        # grant нужного проекта, но БЕЗ этого worktree в workspace_allowlist → deny.
+        g_no = create_grant(project_id="p", mode="STANDARD",
+                            capabilities=["commit", "push_feature"],
+                            allowed_repos=["acme/demo"], allowed_bases=["main"], reason="ws")
+        with self.assertRaises(GitContractError) as cm:
+            prod.commit(self.wc, "VP-7: изменение", grant_id=g_no["id"])
+        self.assertEqual(cm.exception.code, "WORKSPACE_NOT_ALLOWED")
+        # с явным workspace — commit/push проходят.
+        g_ok = create_grant(project_id="p", mode="STANDARD",
+                            capabilities=["commit", "push_feature"],
+                            allowed_repos=["acme/demo"], allowed_bases=["main"],
+                            workspace_allowlist=[self.wc], reason="ws")
+        sha = prod.commit(self.wc, "VP-7: изменение", grant_id=g_ok["id"])
+        self.assertTrue(sha)
+        prod.push_feature(self.wc, "atlas/vp-7-ws", grant_id=g_ok["id"])
+        self.assertTrue(self.forge.branch_exists("atlas/vp-7-ws"))
+
+    # --- call-13 fix (finding 2): squash-merge передаёт --match-head-commit ---
+    def test_ghforge_squash_merge_uses_match_head_commit(self):
+        from atlas_core.github_adapter import GhForge, PullRequest
+        captured = {}
+
+        class FakeGh(GhForge):
+            def __init__(self):
+                super().__init__("a/b")
+
+            def get_pr(self, number):
+                return PullRequest(number=number, base="main", head_branch="atlas/x",
+                                   head_sha="H", title="t", body="b", state="OPEN")
+
+            def _gh(self, *args, **kw):
+                captured["args"] = args
+
+                class R:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+                return R()
+
+        FakeGh().squash_merge(1, expected_head="H")
+        self.assertIn("--match-head-commit", captured["args"])
+        self.assertIn("H", captured["args"])
+
+    # --- call-13 fix (finding 3): ПОВТОРНЫЙ барьер Emergency перед squash ---
+    def test_emergency_second_barrier_blocks_merge_before_squash(self):
+        from atlas_core import emergency
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")
+        calls = {"n": 0}
+        real = emergency.blocks_new_jobs
+
+        def patched():
+            calls["n"] += 1
+            return calls["n"] >= 3  # 1=_consume,2=первый барьер (проходят); 3=барьер перед squash
+
+        emergency.blocks_new_jobs = patched
+        try:
+            with self.assertRaises(GitContractError) as cm:
+                prod.merge_pull_request(project_id="p", review_package_id=rp,
+                                        quality_report_id=qr, pr_number=prn, expected_head=sha,
+                                        grant_id=g["id"], base="main")
+        finally:
+            emergency.blocks_new_jobs = real
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # squash не исполнен
+        self.assertGreaterEqual(calls["n"], 3)  # достигнут второй (пред-squash) барьер
 
     # --- call-9 fix (finding 2): реальный merge пишет durable delivery-историю ---
     def test_merge_records_authoritative_delivery(self):
@@ -812,6 +896,7 @@ class TestGithubAdapter(VP7Base):
         from atlas_core.github_adapter import GitContractError
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["push_feature"],
                          allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc],
                          budget={"max_invocations": 1}, reason="budget")
         self._feature()
         # первый push с grant — списывает 1/1
@@ -903,6 +988,7 @@ class TestGithubAdapter(VP7Base):
         g = create_grant(project_id="p", mode="STANDARD",
                          capabilities=["commit", "push_feature", "create_pr", "merge_after_pass"],
                          allowed_repos=["acme/demo"], allowed_bases=["main"],
+                         workspace_allowlist=[self.wc],
                          budget={"max_invocations": 4}, reason="budget")
         subprocess.run(["git", "-C", self.wc, "checkout", "-b", "atlas/vp-7-x"], capture_output=True)
         Path(self.wc, "f.py").write_text("x=1")
