@@ -11,6 +11,8 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
   const [sel, setSel] = useState<string[]>([]);
   const [cmp, setCmp] = useState<CompareResult | null>(null);
   const [preview, setPreview] = useState<{ id: string; data: Record<string, unknown> } | null>(null);
+  const [grantId, setGrantId] = useState("");
+  const [replay, setReplay] = useState<{ id: string; data: Record<string, unknown> } | null>(null);
 
   const refresh = useCallback(async () => {
     try { setRows((await api.listAtlasCheckpoints()).checkpoints); setError(null); }
@@ -33,6 +35,17 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
     try {
       const r = await api.rollbackPreview(id, "");
       setPreview({ id, data: r.preview });
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+
+  // Production replay: создаёт новый Run и материализует безопасную ветку из
+  // состояния checkpoint (доверенный checkout выводится на сервере из durable state).
+  const doReplay = async (id: string) => {
+    if (!grantId.trim()) { setError(t("tm.replayNeedGrant")); return; }
+    try {
+      const r = await api.replay(id, grantId.trim());
+      setReplay({ id, data: r.replay });
+      setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -64,6 +77,15 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
         <span className="tm-node src">{t("tm.sourceBranch")}</span>
         <span className="tm-arrow" aria-hidden="true" />
         <span className="tm-node dst">{t("tm.safeBranch")} (atlas/replay-…)</span>
+      </div>
+
+      {/* Grant для production replay (создание безопасной ветки/Run) */}
+      <div className="field-row">
+        <label className="field">
+          <span className="field-label">{t("tm.grantId")}</span>
+          <input className="input mono" value={grantId} placeholder="grnt_…"
+            onChange={(e) => setGrantId(e.target.value)} aria-label={t("tm.grantId")} />
+        </label>
       </div>
 
       {/* Хронология чекпоинтов */}
@@ -98,6 +120,7 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
                     <td className="mono small">{c.profile_alias}<br /><span className="muted">{c.model}{c.effort ? `/${c.effort}` : ""}</span></td>
                     <td className="mono small"><time dateTime={c.created_at} title={`${c.created_at} UTC`}>{fmtLocal(c.created_at, locale)}</time></td>
                     <td>
+                      <button className="btn btn-sm" onClick={() => doReplay(c.id)}>{t("tm.replay")}</button>{" "}
                       <button className="btn btn-sm" onClick={() => doRestorePreview(c.id)}>{t("tm.rollbackPreview")}</button>
                     </td>
                   </tr>
@@ -156,6 +179,25 @@ export function TimeMachineView({ t, locale }: { t: T; locale: Locale }) {
             <dt>{t("auto.reason")}</dt><dd className="mono">{String((preview.data as { reason?: string }).reason ?? "")}</dd>
             <dt>{t("overview.nextAction")}</dt><dd>{String((preview.data as { next_action?: string }).next_action ?? "")}</dd>
           </dl>
+        </section>
+      )}
+
+      {/* Результат production replay: новая безопасная ветка + новый Run */}
+      {replay && (
+        <section className="panel" aria-labelledby="rp-h">
+          <div className="hero-head">
+            <h2 id="rp-h">{t("tm.replayResult")}</h2>
+            <button className="btn btn-sm" onClick={() => setReplay(null)}>✕</button>
+          </div>
+          <dl className="kv">
+            <dt>{t("tm.newBranch")}</dt>
+            <dd className="mono">{String((replay.data as { new_branch?: string }).new_branch ?? "")}</dd>
+            <dt>{t("tm.newRun")}</dt>
+            <dd className="mono">{String((replay.data as { new_run_id?: string }).new_run_id ?? "")}</dd>
+            <dt>{t("tm.sourceBranch")}</dt>
+            <dd className="mono">{String((replay.data as { source_branch?: string }).source_branch ?? "")}</dd>
+          </dl>
+          <p className="muted field-hint">{t("tm.replayNote")} {t("tm.noCredentials")}</p>
         </section>
       )}
     </>

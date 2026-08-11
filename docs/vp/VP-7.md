@@ -259,9 +259,24 @@ create_pr/merge), а не только в начале `_consume`; **C** — я�
 наличии всех required-jobs со `success` (закрывает отсутствующую/постороннюю/
 pending/skipped/дублированную job). Регрессия **429 OK**; acceptance 34/34; Chrome
 50/50 (39 PNG + sha256-manifest); секрет-скан ЧИСТО; живая БД остаётся `0006`.
-call-7…11 immutable. NEXT: **call 12** по исправленному зелёному head (лимиты
-Codex сброшены владельцем); при genuine PASS — merge/backup/миграция/deploy/
-truth-sync.
+call-7…11 immutable.
+
+### call 12 — genuine REVISE (head `a15bd87`, codex-plus-01)
+
+Четыре находки: (1, критично) production replay для local_git не проверял
+фактический workspace-scope grant (`_project_repo`→None ⇒ `repo=None`, проверялись
+лишь непустые allowlists); (2, высокий) `GET /checkpoints/compare` не маппил
+`InvalidCheckpointError` в `INVALID_EVIDENCE` (tampered → 500); (3, высокий) Web
+Time Machine не подключён к production replay (нет метода в `api.ts`/действия в UI);
+(4, средний) `replay()` при пустом `head_sha` брал `base_sha` (baseline) вместо
+fail-closed `CHECKPOINT_NO_HEAD`. **Fix:** для local_git replay энфорсит
+`workspace`-scope (grant обязан перечислять мутируемый checkout); compare-endpoint
+возвращает `INVALID_EVIDENCE` (409); `api.replay` + replay-действие/результат в
+`timemachine.tsx` (RU/EN); `replay()` fail-closed `CHECKPOINT_NO_HEAD` при пустом
+head_sha ДО создания ветки/Run. Регрессия **432 OK**; acceptance 34/34; Web i18n
+736/736 + tsc + build; Chrome 50/50 (39 PNG); секрет-скан ЧИСТО; живая БД остаётся
+`0006`. call-7…12 immutable. NEXT: **call 13** по исправленному зелёному head; при
+genuine PASS — merge/backup/миграция/deploy/truth-sync.
 
 ## Границы (не VP-8/VP-9)
 

@@ -63,8 +63,12 @@
   (grant version-snapshot, Emergency-барьер у каждой forge-границы, явная политика
   обязательных CI-контекстов) + production HTTP replay через доверенный checkout из
   durable-состояния. Лимит на число Reviewer-вызовов снят владельцем
-  (последовательно до PASS). call-7…11 immutable, не переименовываются в PASS;
-  следующий подлинный вызов — **call 12** (лимиты Codex сброшены владельцем).
+  (последовательно до PASS). call **12** (head `a15bd87`, codex-plus-01) → genuine
+  **REVISE** (4 находки: local_git replay без workspace-scope; compare endpoint не
+  маппил InvalidCheckpointError→INVALID_EVIDENCE; Web не подключён к production
+  replay; replay при пустом head_sha не fail-closed) → исправлено с тестами. call-7…12
+  immutable, не переименовываются в PASS; следующий подлинный вызов — **call 13** по
+  исправленному зелёному head.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

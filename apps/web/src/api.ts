@@ -333,6 +333,10 @@ export const api = {
   replayPreview: (id: string, grantId: string) =>
     sendJSON<{ preview: Record<string, unknown> }>(
       `/api/v1/checkpoints/${id}/replay-preview`, "POST", { grant_id: grantId }),
+  replay: (id: string, grantId: string, profileAlias?: string) =>
+    sendJSON<{ replay: Record<string, unknown> }>(
+      `/api/v1/checkpoints/${id}/replay`, "POST",
+      { grant_id: grantId, profile_alias: profileAlias ?? null }),
   rollbackPreview: (id: string, grantId: string) =>
     sendJSON<{ preview: Record<string, unknown> }>(
       `/api/v1/checkpoints/${id}/rollback-preview`, "POST", { grant_id: grantId }),

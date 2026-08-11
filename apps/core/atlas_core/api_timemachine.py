@@ -26,6 +26,11 @@ def list_checkpoints(project_id: str | None = Query(None),
 def compare(a: str = Query(...), b: str = Query(...)) -> JSONResponse:
     try:
         return JSONResponse({"compare": TM.compare(a, b)})
+    except TM.InvalidCheckpointError as exc:
+        # call-12 fix (finding 2): подделанный/протухший checkpoint → стабильный
+        # INVALID_EVIDENCE (409), а не необработанное исключение/HTTP 500.
+        return JSONResponse({"error": {"code": "INVALID_EVIDENCE", "reason": str(exc)}},
+                            status_code=409)
     except TM.TimeMachineError as exc:
         return JSONResponse({"error": {"code": exc.code, "reason": exc.message}}, status_code=404)
 

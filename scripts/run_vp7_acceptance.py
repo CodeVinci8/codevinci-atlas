@@ -507,8 +507,10 @@ class VP7:
         head = _git(repo, "rev-parse", "HEAD").stdout.strip()
         cp = create_checkpoint(CheckpointInputs(project_id="proj_v7", vp_key="VP-7",
                                branch="atlas/vp-7-src", base_sha=base, head_sha=head, cause="post"))
+        # local-мутация без github repo-имени → workspace-scope обязателен (call-12 finding 1).
         g = self._grant(mode="AUTONOMOUS", capabilities=["repo_write"],
-                        allowed_repos=["proj/v7"], allowed_bases=["main"])
+                        allowed_repos=["proj/v7"], allowed_bases=["main"],
+                        workspace_allowlist=[repo])
         res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         src_after = _git(repo, "rev-parse", "atlas/vp-7-src").stdout.strip()
         new_ok = _git(repo, "rev-parse", "--verify", res["new_branch"]).returncode == 0

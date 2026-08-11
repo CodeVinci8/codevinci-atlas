@@ -1223,8 +1223,10 @@ class TestTimeMachine(VP7Base):
         from atlas_core.timemachine import replay
         repo, base, head = self._repo_with_base_head()
         cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        # local-мутация без github repo-имени → workspace-scope обязателен (call-12 finding 1).
         g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
-                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
         res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         # новая ветка указывает на head_sha checkpoint (не baseline).
         new_head = subprocess.run(["git", "-C", repo, "rev-parse", res["new_branch"]],
@@ -1242,7 +1244,8 @@ class TestTimeMachine(VP7Base):
         repo, base, head = self._repo_with_base_head()
         cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
         g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
-                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
         r1 = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         r2 = replay(cp["id"], grant_id=g["id"], repo_path=repo)  # не падает на существующей ветке
         self.assertNotEqual(r1["new_branch"], r2["new_branch"])   # уникальные ветки
@@ -1370,6 +1373,58 @@ class TestTimeMachine(VP7Base):
         self.assertNotIn("target_branch", prev)                # нет обещания точного имени
         self.assertIn("<уникальный-токен>", prev["target_branch_pattern"])
 
+    # --- call-12 fix (finding 1): local_git replay требует workspace-scope ---
+    def test_replay_local_git_requires_workspace_scope(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        repo, base, head = self._repo_with_base_head()
+        cp = self._ckpt(project_id="p", branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        # repo-имя не выводимо (нет github Project) → grant с произвольными allowed_repos,
+        # но БЕЗ workspace, НЕ разрешает мутацию checkout (fail-closed exact-scope).
+        g_no = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                            allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g_no["id"], repo_path=repo)
+        self.assertEqual(cm.exception.code, "WORKSPACE_NOT_ALLOWED")
+        # grant, явно перечисляющий этот workspace, разрешает.
+        g_ok = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                            allowed_repos=["a/b"], allowed_bases=["main"],
+                            workspace_allowlist=[repo], reason="r")
+        res = replay(cp["id"], grant_id=g_ok["id"], repo_path=repo)
+        self.assertTrue(res["new_branch"].startswith("atlas/replay-"))
+
+    # --- call-12 fix (finding 4): checkpoint без head_sha → fail-closed ---
+    def test_replay_headless_checkpoint_fails_closed(self):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        repo, base, _head = self._repo_with_base_head()
+        cp = self._ckpt(project_id="p", branch="atlas/vp-7-src", base_sha=base, head_sha="")
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
+        with self.assertRaises(TimeMachineError) as cm:
+            replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        self.assertEqual(cm.exception.code, "CHECKPOINT_NO_HEAD")
+
+    # --- call-12 fix (finding 2): compare endpoint tampered → 409 INVALID_EVIDENCE ---
+    def test_compare_endpoint_tampered_returns_invalid_evidence(self):
+        from atlas_core.app import create_app
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint
+        from atlas_core.settings import load_settings
+        from starlette.testclient import TestClient
+        a = self._ckpt(head_sha="H1")
+        b = self._ckpt(head_sha="H2")
+        client = TestClient(create_app(load_settings()))
+        ok = client.get(f"/api/v1/checkpoints/compare?a={a['id']}&b={b['id']}")
+        self.assertEqual(ok.status_code, 200)
+        with session_scope() as s:
+            s.get(Checkpoint, a["id"]).head_sha = "TAMPERED"
+            s.commit()
+        bad = client.get(f"/api/v1/checkpoints/compare?a={a['id']}&b={b['id']}")
+        self.assertEqual(bad.status_code, 409)
+        self.assertEqual(bad.json()["error"]["code"], "INVALID_EVIDENCE")
+
     def test_replay_new_run_safe_branch_no_rewrite(self):
         from atlas_core.autonomy import create_grant
         from atlas_core.timemachine import replay
@@ -1392,7 +1447,8 @@ class TestTimeMachine(VP7Base):
                               text=True).stdout.strip()
         cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
         g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
-                         allowed_repos=["a/b"], allowed_bases=["main"], reason="r")
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
         res = replay(cp["id"], grant_id=g["id"], repo_path=repo)
         self.assertTrue(res["new_run_id"])
         self.assertTrue(res["new_branch"].startswith("atlas/replay-"))

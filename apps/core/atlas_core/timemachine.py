@@ -287,34 +287,42 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
 
     # Grant должен явно разрешать repo_write в выведенном scope (не только «свежий»).
     # base/environment=None: authoritative-dimension для replay отсутствует.
+    # call-12 fix (finding 1): для local_git (repo-имя не выводимо, eval_repo=None)
+    # авторитетный exact-scope — это МУТИРУЕМЫЙ checkout (workspace). Иначе grant того
+    # же project_id с произвольными allowed_repos/allowed_bases разрешил бы ветку в
+    # любом локальном checkout. Требуем, чтобы grant ЯВНО перечислял этот workspace в
+    # workspace_allowlist (fail-closed WORKSPACE_NOT_ALLOWED). Для github repo-имя уже
+    # даёт exact-scope, поэтому workspace там не навязываем.
+    eval_workspace = repo_path if (eval_repo is None and repo_path) else None
     dec = autonomy.evaluate(Capability.REPO_WRITE.value, grant_id=grant_id,
                             project_id=trusted_project, repo=eval_repo, base=None,
-                            environment=None)
+                            environment=None, workspace=eval_workspace)
     if not dec.permitted:
         raise TimeMachineError(dec.reason_code,
                                f"replay требует capability repo_write в выведенном scope ({dec.reason_code})")
+
+    # call-12 fix (finding 4): checkpoint без head_sha НЕвоспроизводим — fail-closed
+    # ДО создания ветки/Run (не baseline-подмена). Contract §21: replay воспроизводит
+    # именно head-состояние checkpoint. Пустой head_sha при валидном хеше → отказ.
+    if not cp["head_sha"]:
+        raise TimeMachineError("CHECKPOINT_NO_HEAD",
+                               "checkpoint без head_sha — состояние checkpoint невоспроизводимо")
 
     new_branch = _safe_replay_branch(cp["branch"], checkpoint_id)
     source_head_before = None
     if repo_path:
         source_head_before = _git_head(repo_path, cp["branch"])
         # call-11 fix (finding 1): воспроизводим СОСТОЯНИЕ checkpoint (head_sha), а не
-        # baseline. Ветка создаётся от head_sha — иначе изменения base..head теряются
-        # и replay давал бы baseline-ветку. head_sha пуст/недоступен в репо →
-        # fail-closed (не «тихо» baseline).
-        target = cp["head_sha"] or cp["base_sha"]
-        if not target:
-            raise TimeMachineError("CHECKPOINT_NO_HEAD",
-                                   "checkpoint без head_sha — состояние не воспроизводимо")
-        r = _git(repo_path, "branch", new_branch, target)
+        # baseline. Ветка создаётся строго от head_sha (см. CHECKPOINT_NO_HEAD выше) —
+        # иначе изменения base..head теряются.
+        r = _git(repo_path, "branch", new_branch, cp["head_sha"])
         if r.returncode != 0:
             raise TimeMachineError("BRANCH_FAILED", redact((r.stderr or r.stdout))[:160])
         # Проверяем, что новая ветка указывает именно на состояние checkpoint (head_sha).
-        if cp["head_sha"]:
-            new_head = _git_head(repo_path, new_branch)
-            if new_head and new_head != cp["head_sha"]:
-                raise TimeMachineError("REPLAY_STATE_MISMATCH",
-                                       "новая ветка не соответствует head_sha checkpoint")
+        new_head = _git_head(repo_path, new_branch)
+        if new_head and new_head != cp["head_sha"]:
+            raise TimeMachineError("REPLAY_STATE_MISMATCH",
+                                   "новая ветка не соответствует head_sha checkpoint")
         source_head_after = _git_head(repo_path, cp["branch"])
         if source_head_before is not None and source_head_after != source_head_before:
             raise TimeMachineError("SOURCE_REWRITTEN", "source-ветка была изменена — откат")
