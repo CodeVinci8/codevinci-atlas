@@ -110,8 +110,12 @@ socket with a request token. Credentials are never mounted into Web. See
 
 ## License
 
-Not chosen yet: LICENSE is fixed after the VP-0 reuse audit (candidates
-MIT/Apache-2.0) and requires separate owner approval (Master Spec §49).
+**Apache License 2.0** (`SPDX-License-Identifier: Apache-2.0`) — an owner
+decision (Master Spec §49; see [`docs/DECISIONS.md`](docs/DECISIONS.md)). The
+official text lives in the root [`LICENSE`](LICENSE) file. Reuse audit: no
+third-party code was copied (every entry in
+[`docs/REUSE_REGISTER.md`](docs/REUSE_REGISTER.md) is REFERENCE/SPIKE), so no
+`NOTICE` is required.
 
 ## Privacy and security
 

@@ -4,6 +4,43 @@
 (§1). Пункты «требуют подтверждения» не выполняются без явного grant владельца
 в текущей сессии.
 
+## VP7-OWNER — авторизация закрытия VP-7 (2026-08-03)
+
+Владелец в текущей сессии **явно авторизовал** закрытие VP-7 (Autonomy, GitHub &
+Time Machine): локальную реализацию, детерминированную приёмку, реальную
+Chrome-верификацию, read-only auth-проверки 4 профилей, ≤4 subscription-вызова
+на отложенный реальный VP-6 Quality E2E, добавление **Apache License 2.0**, push
+feature-ветки, русский PR, исправление CI текущего head, squash-merge после PASS,
+verified backup и обновление приватного loopback-стека Atlas, пост-merge
+truth-sync PR со squash-merge. **Не** авторизовано: создание/удаление
+GitHub-репозитория, удаление веток, прямой push в `main`, force push/rewrite,
+production/public deploy, DNS/Nginx/TLS, мутация cookie/логина, destructive
+cleanup, удаление данных владельца, платные вызовы сверх лимита, File Atelier,
+VP-8/VP-9, посторонние репозитории/сервисы VPS.
+
+## VP7-LICENSE — LICENSE = Apache-2.0 (OWNER-APPROVED, 2026-08-03)
+
+Владелец выбрал **`Apache-2.0`** для CodeVinci Atlas (закрывает §49 «LICENSE» и
+§20.4 «License после reuse-аудита»).
+
+- В корень добавлен `LICENSE` с **немодифицированным официальным текстом**
+  Apache License 2.0 из `https://www.apache.org/licenses/LICENSE-2.0.txt`
+  (sha256 `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` —
+  канонический текст, распознаётся GitHub/Licensee).
+- SPDX-идентификатор `Apache-2.0` в `pyproject.toml` (`license`,
+  `license-files`) и `apps/web/package.json`; README RU/EN дополнены секцией
+  лицензии со SPDX.
+- Quality license-gate переведён из «owner decision pending» в фактический
+  `LICENSE_PRESENT` (Apache-2.0); старый `LICENSE_ABSENT_OWNER_DECISION` finding
+  больше не эмитится при наличии LICENSE.
+- **Reuse/license-аудит** (`docs/REUSE_REGISTER.md`, dependency manifests): все
+  сторонние проекты — **REFERENCE/SPIKE**, кода **не копировалось** (нет ADOPT).
+  Прямые зависимости (FastAPI/uvicorn/pydantic/SQLAlchemy/Alembic/PyYAML/httpx —
+  все permissive: MIT/BSD/Apache/PSF) совместимы с Apache-2.0. Ассеты/исходники/
+  стили TonWave/Sub2API/3x-ui **не копировались**. **`NOTICE` не требуется**
+  (нет фактической upstream-обязанности; атрибуция не выдумывается).
+- Распознавание GitHub/Licensee проверяется после merge.
+
 ## OWNER-APPROVED — авторизация текущей сессии (Phase 0/A/B)
 
 Владелец в текущей сессии подтвердил и авторизовал: логин 4 реальных профилей

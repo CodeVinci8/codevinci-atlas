@@ -30,3 +30,4 @@ credentials.json
 # ОС/редакторы
 .DS_Store
 *.swp
+/.vp7-review-diff.patch

@@ -123,8 +123,11 @@ domain socket с request-token. Credentials не монтируются в Web. 
 
 ## Лицензия
 
-Пока не выбрана: LICENSE фиксируется после reuse-аудита VP-0 (кандидаты
-MIT/Apache-2.0) и требует отдельного подтверждения владельца (Master Spec §49).
+**Apache License 2.0** (`SPDX-License-Identifier: Apache-2.0`) — решение
+владельца (Master Spec §49; см. [`docs/DECISIONS.md`](docs/DECISIONS.md)).
+Официальный текст — в корневом файле [`LICENSE`](LICENSE). Reuse-аудит: сторонний
+код не копировался (все записи в [`docs/REUSE_REGISTER.md`](docs/REUSE_REGISTER.md)
+— REFERENCE/SPIKE), поэтому `NOTICE` не требуется.
 
 ## Приватность и безопасность
 

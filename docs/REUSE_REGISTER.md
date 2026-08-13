@@ -118,6 +118,33 @@ App.tsx,api.ts,i18n.ts,locales/*,styles.css}` — нативные; ни код�
 строк, ни ассетов TonWave/Sub2API не заимствовано. Truth-status/решения показаны
 символ+текст+цвет (не только цветом); фейкового прогресса/ёмкости нет.
 
+## VP-7 (Sub2API — Claude usage, REFERENCE)
+
+- **Репозиторий:** `https://github.com/Wei-Shaw/sub2api`
+- **Pinned commit:** `00b8596176809906993169c283671811ad04f58d`
+- **Лицензия:** LGPL-3.0
+- **Инспектированные файлы:** `backend/internal/service/account_usage_service.go`,
+  `backend/internal/repository/claude_usage_service.go`, `backend/ent/schema/account.go`,
+  `frontend/src/components/account/AccountUsageCell.vue`,
+  `frontend/src/utils/accountUsageRefresh.ts`, `docs/COMPOSITE_GROUPS.md`, `LICENSE`.
+- **Решение:** **REFERENCE / REIMPLEMENT** (не ADOPT, не WRAP). Ни строки кода, ни
+  компонентов, ни текста, ни бренда/ассетов/стилей Sub2API не скопировано,
+  не переведено, не vendor-но и не слинковано.
+- **Явно отвергнуто (несовместимо с §30/owner-границами):** вызов **недокументирован-
+  ного Anthropic OAuth usage-endpoint** (`s.usageFetcher.FetchUsageWithOptions` →
+  Claude usage API), **TLS-fingerprinting** (`TLSFingerprintProfileService`,
+  `tlsfingerprint.Profile`) и jitter «to avoid triggering abuse detection». Atlas
+  берёт числа только из ОФИЦИАЛЬНОГО status-line `rate_limits` (документированный
+  путь), иначе честный fallback/UNKNOWN.
+- **Переосмыслено независимо (общие паттерны, собственный код):** per-profile
+  scheduling/priority/last-use; reset-таймстемпы + пересчёт остатка; freshness и
+  STALE-fallback; bounded cache + single-flight (аналог их singleflight); lazy
+  refresh; прогресс-бары; soft operational removal с immutable-историей (disabled-
+  профиль); fail-closed provider/model routing. Файлы: `apps/core/atlas_core/
+  {capacity.py,claude_pool.py,router.py}`, `apps/web/src/{profiles.tsx,api.ts}` —
+  нативные, без заимствований.
+- **Граница скопированного кода:** отсутствует (0 строк).
+
 ## Итог VP-0
 
 Кода из внешних проектов **не адоптировано**. Изоляция профилей, writer-lease,

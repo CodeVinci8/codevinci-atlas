@@ -36,4 +36,4 @@ Reviewer не совпадает с сессией Builder (§17.1).
 ## Границы VP
 
 Активный VP — из [`docs/NEXT.md`](docs/NEXT.md). Scope следующего VP не
-расширять молча. Текущий — **VP-0**.
+расширять молча. Текущий — **VP-7** (Autonomy, GitHub & Time Machine).

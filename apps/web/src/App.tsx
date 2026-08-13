@@ -9,10 +9,14 @@ import { WorkOrdersView } from "./workorders";
 import { RunsView } from "./runs";
 import { ProfilesView } from "./profiles";
 import { QualityView } from "./quality";
+import { AutonomyView } from "./autonomy";
+import { TimeMachineView } from "./timemachine";
+import { NavIcon, type IconName } from "./icons";
 import { fmtBytes, fmtDuration, fmtLocal, fmtRelative } from "./fmt";
-import type { SystemSummary } from "./api";
+import type { NextAction, SystemSummary } from "./api";
 
-type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles" | "quality";
+type NavView = "projects" | "pulse" | "portfolio" | "runs" | "profiles" | "quality"
+  | "autonomy" | "timemachine";
 
 type T = (key: LocaleKey) => string;
 function useT(locale: Locale): T {
@@ -62,10 +66,29 @@ function sourceKey(k: SourceKind): LocaleKey {
   return (`source.${k}`) as LocaleKey;
 }
 
+// Начальный вид/локаль из URL (?view=&locale=) — для детерминированной навигации
+// в Chrome-верификации и глубоких ссылок; иначе дефолты.
+const _NAV_VIEWS = new Set<NavView>(["projects", "pulse", "portfolio", "runs",
+  "profiles", "quality", "autonomy", "timemachine"]);
+function _initialView(): NavView {
+  try {
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v && _NAV_VIEWS.has(v as NavView)) return v as NavView;
+  } catch { /* ignore */ }
+  return "projects";
+}
+function _initialLocale(): Locale {
+  try {
+    const l = new URLSearchParams(window.location.search).get("locale");
+    if (l === "ru" || l === "en") return l;
+  } catch { /* ignore */ }
+  return detectInitialLocale();
+}
+
 // ---------------------------------------------------------------------------
 export function App() {
-  const [locale, setLocale] = useState<Locale>(detectInitialLocale());
-  const [view, setView] = useState<NavView>("projects");
+  const [locale, setLocale] = useState<Locale>(_initialLocale());
+  const [view, setView] = useState<NavView>(_initialView());
   const [selected, setSelected] = useState<string | null>(null);
   const [coreOffline, setCoreOffline] = useState(false);
   const t = useT(locale);
@@ -105,21 +128,27 @@ export function App() {
             <strong>{t("common.offline")}</strong> — {t("common.offlineHint")}
           </div>
         )}
-        {selected ? (
-          <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
-        ) : view === "pulse" ? (
-          <PulseView t={t} locale={locale} />
-        ) : view === "portfolio" ? (
-          <PortfolioView t={t} onOpen={setSelected} />
-        ) : view === "runs" ? (
-          <RunsView t={t} />
-        ) : view === "profiles" ? (
-          <ProfilesView t={t} />
-        ) : view === "quality" ? (
-          <QualityView t={t} locale={locale} />
-        ) : (
-          <ProjectsView t={t} onOpen={setSelected} />
-        )}
+        <div className="route-fade" key={selected ? `p:${selected}` : view}>
+          {selected ? (
+            <ProjectDetail t={t} id={selected} onBack={() => setSelected(null)} />
+          ) : view === "pulse" ? (
+            <PulseView t={t} locale={locale} />
+          ) : view === "portfolio" ? (
+            <PortfolioView t={t} onOpen={setSelected} />
+          ) : view === "runs" ? (
+            <RunsView t={t} />
+          ) : view === "profiles" ? (
+            <ProfilesView t={t} locale={locale} />
+          ) : view === "quality" ? (
+            <QualityView t={t} locale={locale} />
+          ) : view === "autonomy" ? (
+            <AutonomyView t={t} locale={locale} />
+          ) : view === "timemachine" ? (
+            <TimeMachineView t={t} locale={locale} />
+          ) : (
+            <ProjectsView t={t} onOpen={setSelected} />
+          )}
+        </div>
       </main>
     </div>
   );
@@ -130,34 +159,52 @@ function Sidebar({ t, locale, setLocale, view, onNav }: {
   t: T; locale: Locale; setLocale: (l: Locale) => void;
   view: string; onNav: (v: NavView) => void;
 }) {
-  const item = (id: NavView, label: string, sym: string) => (
+  const item = (id: NavView, label: string, icon: IconName) => (
     <button
       className={`nav-item ${view === id ? "active" : ""}`}
       aria-current={view === id ? "page" : undefined}
       onClick={() => onNav(id)}
     >
-      <span className="nav-ico" aria-hidden="true">{sym}</span> {label}
+      <span className="nav-ico" aria-hidden="true"><NavIcon name={icon} /></span> {label}
     </button>
   );
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark" aria-hidden="true">◆</span>
+      <button type="button" className="brand brand-home" aria-label={t("brand.home")}
+        title={t("brand.home")} onClick={() => onNav("pulse")}>
+        <span className="brand-mark" aria-hidden="true">
+          <BrandMark />
+        </span>
         <span className="brand-text">
           <strong>{t("app.title")}</strong>
           <span className="muted">{t("app.subtitle")}</span>
         </span>
-      </div>
+      </button>
       <nav className="nav" aria-label={t("nav.projects")}>
-        {item("pulse", t("nav.pulse"), "◈")}
-        {item("projects", t("nav.projects"), "▤")}
-        {item("profiles", t("nav.profiles"), "◈")}
-        {item("runs", t("nav.runs"), "▶")}
-        {item("quality", t("nav.quality"), "◇")}
-        {item("portfolio", t("nav.portfolio"), "◫")}
+        {item("pulse", t("nav.pulse"), "pulse")}
+        {item("projects", t("nav.projects"), "projects")}
+        {item("profiles", t("nav.profiles"), "profiles")}
+        {item("runs", t("nav.runs"), "runs")}
+        {item("quality", t("nav.quality"), "quality")}
+        {item("autonomy", t("nav.autonomy"), "autonomy")}
+        {item("timemachine", t("nav.timemachine"), "timemachine")}
+        {item("portfolio", t("nav.portfolio"), "portfolio")}
       </nav>
       <LangSwitch t={t} locale={locale} setLocale={setLocale} />
     </aside>
+  );
+}
+
+// Оригинальная марка Atlas (CodeVinci Ember): компас/ромб, графит + ember-акцент.
+function BrandMark() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="#141416" stroke="#2a2928" />
+      <path d="M16 5.5 26.5 16 16 26.5 5.5 16 16 5.5Z" stroke="#3a3936" strokeWidth="1.1" fill="none" />
+      <path d="M16 9.2 20 16 16 22.8 12 16 16 9.2Z" fill="#f28a3d" fillOpacity="0.16"
+        stroke="#f28a3d" strokeWidth="1.3" strokeLinejoin="round" />
+      <circle cx="16" cy="16" r="1.9" fill="#ffad66" />
+    </svg>
   );
 }
 
@@ -619,6 +666,65 @@ function Meter({ label, used, total, na }: {
   );
 }
 
+// Контекстное продуктовое next action (сервер вычисляет код; UI локализует).
+function nextActionText(na: NextAction | undefined, t: T): string {
+  if (!na) return t("sys.okAll");
+  const base = t((`na.${na.code}`) as LocaleKey) ?? na.text;
+  return na.count ? `${base} (${na.count})` : base;
+}
+
+// Реальная CPU-утилизация: компактное кольцо + текст + порог-символ (не только цвет).
+// Первый сэмпл без валидной дельты → «Измерение…» (state=measuring), НЕ 0%.
+function CpuGauge({ pct, window, state, cores, coresLabel, na, measuring, label }: {
+  pct: number | null; window: number | null; state: string; cores: number | null;
+  coresLabel: string; na: string; measuring: string; label: string;
+}) {
+  const isMeasuring = pct === null && state === "measuring";
+  const level = pct === null ? "muted" : pct >= 90 ? "crit" : pct >= 75 ? "warn" : "ok";
+  const sym = level === "crit" ? "■" : level === "warn" ? "▲" : level === "ok" ? "●"
+    : isMeasuring ? "◌" : "○";
+  const r = 16, c = 2 * Math.PI * r;
+  const frac = pct === null ? 0 : Math.max(0, Math.min(1, pct / 100));
+  const stroke = level === "crit" ? "var(--danger)" : level === "warn" ? "var(--warn)"
+    : level === "ok" ? "var(--ember)" : "var(--border)";
+  const valText = pct !== null ? `${pct}%` : isMeasuring ? measuring : na;
+  return (
+    <div className="cpu-gauge">
+      <svg width="52" height="52" viewBox="0 0 44 44" role="img"
+        aria-label={`${label}: ${valText}`}>
+        <circle cx="22" cy="22" r={r} fill="none" stroke="var(--border)" strokeWidth="4" />
+        <circle cx="22" cy="22" r={r} fill="none" stroke={stroke} strokeWidth="4"
+          strokeDasharray={`${(c * frac).toFixed(1)} ${c.toFixed(1)}`} strokeLinecap="round"
+          transform="rotate(-90 22 22)" />
+      </svg>
+      <div className="cpu-txt">
+        <span className="kpi-label">{label}</span>
+        <span className={`cpu-val mono st-${level === "ok" ? "ok" : level === "warn" ? "warn" : level === "crit" ? "danger" : "muted"}`}>
+          <span aria-hidden="true">{sym}</span> {valText}
+        </span>
+        {pct !== null && window !== null
+          ? <span className="muted field-hint">{window.toFixed(1)}s · /proc/stat
+              {cores !== null && ` · ${cores} ${coresLabel}`}</span>
+          : cores !== null && <span className="muted field-hint">{cores} {coresLabel}</span>}
+      </div>
+    </div>
+  );
+}
+
+// --- Предупреждения (замена «Операционных рисков»): dismiss+fingerprint+restore ---
+interface Warning {
+  code: string; sym: string; cls: string; title: string; value: string;
+  action?: string; fingerprint: string;
+}
+const DISMISS_KEY = "atlas.pulse.dismissedWarnings";
+function loadDismissed(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveDismissed(d: Record<string, string>): void {
+  try { localStorage.setItem(DISMISS_KEY, JSON.stringify(d)); } catch { /* best-effort */ }
+}
+
 // Человекочитаемая семья события Audit (§VP6-D3): канонический код сохраняется.
 function auditFamily(eventType: string, t: T): string {
   const head = (eventType.split(".")[0] || "").toLowerCase();
@@ -651,6 +757,7 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(false);
   const [auditFilter, setAuditFilter] = useState("");
+  const [dismissed, setDismissed] = useState<Record<string, string>>(() => loadDismissed());
   const na = t("sys.na");
 
   const refresh = useCallback(async () => {
@@ -670,17 +777,43 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
   const activeRuns = sys?.runs.active ?? 0;
   const ownerReq = sys?.runs.owner_required ?? 0;
 
-  // Операционные риски (важнейшее первым).
-  const risks: { sym: string; cls: string; text: string; action?: string }[] = [];
+  // Предупреждения: код + fingerprint. Fingerprint огрубляем до severity +
+  // 5%-корзины значения (не точный %), чтобы скрытое предупреждение НЕ всплывало
+  // от незначимого изменения на 1%, но вновь появлялось при смене порога/severity
+  // или материальном (≥5%) сдвиге. Документированная корзина: floor(pct/5)*5.
+  const bucket5 = (v: number | null) => (v === null ? "?" : String(Math.floor(v / 5) * 5));
+  const allWarnings: Warning[] = [];
   if (disk.level === "crit")
-    risks.push({ sym: "■", cls: "st-danger", text: `${t("sys.storageCrit")} — ${disk.pct}%`,
-                 action: t("sys.storageAction") });
+    allWarnings.push({ code: "STORAGE", sym: "■", cls: "st-danger", title: t("sys.storageCrit"),
+      value: `${disk.pct}%`, action: t("sys.storageAction"), fingerprint: `crit:${bucket5(disk.pct)}` });
   else if (disk.level === "warn")
-    risks.push({ sym: "▲", cls: "st-warn", text: `${t("sys.storageWarn")} — ${disk.pct}%` });
+    allWarnings.push({ code: "STORAGE", sym: "▲", cls: "st-warn", title: t("sys.storageWarn"),
+      value: `${disk.pct}%`, action: t("sys.storageAction"), fingerprint: `warn:${bucket5(disk.pct)}` });
   if (runner !== "READY")
-    risks.push({ sym: "▲", cls: "st-warn", text: t("runner.offlineHint") });
+    allWarnings.push({ code: "RUNNER", sym: "▲", cls: "st-warn", title: t("warn.runner"),
+      value: t("runner.offlineHint"), fingerprint: `state:${runner}` });
   if (ownerReq > 0)
-    risks.push({ sym: "◆", cls: "st-warn", text: `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}` });
+    allWarnings.push({ code: "OWNER_RUN", sym: "◆", cls: "st-warn", title: t("warn.ownerRun"),
+      value: `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}`, action: t("na.OPEN_OWNER_RUN"),
+      fingerprint: `count:${ownerReq}` });
+
+  // Предупреждение показано, если код не скрыт ИЛИ его fingerprint изменился.
+  const visibleWarnings = allWarnings.filter((w) => dismissed[w.code] !== w.fingerprint);
+  const hiddenCount = allWarnings.length - visibleWarnings.length;
+
+  const dismissWarning = (w: Warning) => {
+    const next = { ...dismissed, [w.code]: w.fingerprint };
+    setDismissed(next); saveDismissed(next);
+  };
+  const restoreWarnings = () => {
+    const codes = new Set(allWarnings.map((w) => w.code));
+    const next = Object.fromEntries(Object.entries(dismissed).filter(([k]) => !codes.has(k)));
+    setDismissed(next); saveDismissed(next);
+  };
+
+  // Показываем блок next action только если оно реально actionable (Run/VP).
+  const na2 = sys?.next_action;
+  const showNextAction = !!na2 && na2.actionable === true;
 
   const auditEvents = (audit?.events ?? []).filter(
     (e) => !auditFilter || e.event_type.toLowerCase().includes(auditFilter.toLowerCase()));
@@ -710,26 +843,37 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
             ? <>{t("sys.activePipeline")}: <b>{activeRuns}</b> · {t("sys.runsQueued")}: {sys?.runs.queued ?? 0}</>
             : <span className="muted">{t("sys.noActive")}</span>}
         </p>
-        <div className="next-action">
-          <span className="na-label">{t("overview.nextAction")}</span>
-          <span className="na-text">
-            {ownerReq > 0 ? `${t("runs.state.OWNER_REQUIRED")}: ${ownerReq}`
-              : risks.length === 0 ? t("sys.okAll") : risks[0].text}
-          </span>
-        </div>
+        {/* Next action показываем ТОЛЬКО когда оно реально actionable (Run/VP);
+            «всё завершено»/ресурсные предупреждения сюда не попадают. */}
+        {showNextAction && (
+          <div className="next-action">
+            <span className="na-label">{t("sys.nextAction")}</span>
+            <span className="na-text">{nextActionText(na2, t)}</span>
+          </div>
+        )}
       </section>
 
-      {/* Операционные риски (первыми) */}
-      <section className="panel" aria-labelledby="risk-h">
-        <h2 id="risk-h">{t("sys.risks")}</h2>
-        {risks.length === 0 ? (
+      {/* Предупреждения (замена «Операционных рисков»): dismiss + restore */}
+      <section className="panel" aria-labelledby="warn-h">
+        <div className="hero-head">
+          <h2 id="warn-h">{t("sys.warnings")}</h2>
+          {hiddenCount > 0 && (
+            <button className="btn btn-sm" onClick={restoreWarnings}>
+              {t("warn.hidden")} ({hiddenCount}) · {t("warn.restore")}
+            </button>
+          )}
+        </div>
+        {visibleWarnings.length === 0 ? (
           <p className="ok-line"><span className="badge st-ok">● {t("sys.okAll")}</span></p>
         ) : (
           <ul className="risk-list">
-            {risks.map((r, i) => (
-              <li key={i} className={`risk ${r.cls}`}>
-                <span className={`badge ${r.cls}`}><span aria-hidden="true">{r.sym}</span> {r.text}</span>
-                {r.action && <span className="risk-action muted"> — {r.action}</span>}
+            {visibleWarnings.map((w) => (
+              <li key={w.code} className={`risk ${w.cls}`}>
+                <span className={`badge ${w.cls}`}>
+                  <span aria-hidden="true">{w.sym}</span> {w.title} — {w.value}</span>
+                {w.action && <span className="risk-action muted"> — {w.action}</span>}
+                <button className="warn-x" onClick={() => dismissWarning(w)}
+                        aria-label={`${t("warn.dismissAria")}: ${w.title}`}>×</button>
               </li>
             ))}
           </ul>
@@ -755,16 +899,14 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
         )}
         {sys && (
           <div className="res-grid">
+            <CpuGauge pct={sys.cpu.utilization_pct} window={sys.cpu.sample_window_s}
+                      state={sys.cpu.util_state} cores={sys.cpu.logical_cores}
+                      coresLabel={t("sys.coresShort")} na={t("sys.cpuUnavailable")}
+                      measuring={t("sys.cpuMeasuring")} label={t("sys.cpu")} />
             <Meter label={t("sys.memory")} used={sys.memory.used_bytes}
                    total={sys.memory.total_bytes} na={na} />
             <Meter label={t("sys.disk")} used={sys.disk.used_bytes}
                    total={sys.disk.total_bytes} na={na} />
-            <div className="kpi">
-              <span className="kpi-label">{t("sys.loadLabel")}</span>
-              <span className="kpi-val mono">{sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na}</span>
-              <span className="muted field-hint">{t("sys.loadNote")}
-                {sys.cpu.logical_cores !== null && ` · ${sys.cpu.logical_cores} ${t("sys.cores")}`}</span>
-            </div>
           </div>
         )}
       </section>
@@ -788,6 +930,12 @@ function PulseView({ t, locale }: { t: T; locale: Locale }) {
               value={sys.leases.worktree_writers !== null ? String(sys.leases.worktree_writers) : t("common.unknown")} />
             <Kpi label={t("sys.profileLeases")}
               value={sys.leases.profile_leases !== null ? String(sys.leases.profile_leases) : t("common.unknown")} />
+            <div className="kpi">
+              <span className="kpi-label">{t("sys.loadLabel")}</span>
+              <span className="kpi-val mono">{sys.cpu.load_avg ? sys.cpu.load_avg.join(" / ") : na}</span>
+              <span className="muted field-hint">{t("sys.loadNote")}
+                {sys.cpu.logical_cores !== null && ` · ${sys.cpu.logical_cores} ${t("sys.cores")}`}</span>
+            </div>
           </div>
           <p className="muted field-hint">{t("sys.web")}: {t("common.unknown")} — {t("sys.webBackend")}</p>
           <p className="muted field-hint">{t("sys.lastRefresh")}:{" "}

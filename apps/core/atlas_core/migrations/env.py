@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from alembic import context
+from atlas_core.migration_guard import assert_live_migration_allowed
 from atlas_core.orm import Base
 from atlas_core.settings import load_settings
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
+
+# Fail-closed до любой миграции: живой production data_dir/DB мигрируется ТОЛЬКО при
+# ATLAS_ALLOW_LIVE_MIGRATION=1 (guarded deploy §8). Изолированные/CI/dev-цели — свободно.
+assert_live_migration_allowed(purpose="alembic env")
 
 _settings = load_settings()
 config.set_main_option("sqlalchemy.url", _settings.db_url)

@@ -58,6 +58,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .api_reviews import router as reviews_router
     app.include_router(reviews_router)
 
+    # VP-7 Autonomy, GitHub & Time Machine: grants, Emergency Stop, merge gate,
+    # deliveries, checkpoints/replay/compare.
+    from .api_autonomy import router as autonomy_router
+    from .api_timemachine import router as timemachine_router
+    app.include_router(autonomy_router)
+    app.include_router(timemachine_router)
+
     @app.get("/api/v1/health")
     def health() -> JSONResponse:
         # Core проверяет собственную БД и Runner (честный degraded).

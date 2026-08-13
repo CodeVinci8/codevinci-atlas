@@ -40,22 +40,63 @@
 
 ## Активный VP
 
-**Нет активного VP.** VP-0…VP-6 завершены и смёржены. Следующий гейт — **VP-7
-(Autonomy, GitHub & Time Machine, Master Spec §40)**, но он **не начат** и
-стартует только по отдельному решению владельца.
+**VP-7 — Autonomy, GitHub & Time Machine (Master Spec §40): В РАБОТЕ**
+([`vp/VP-7.md`](vp/VP-7.md)). Ветка `atlas/vp-7-autonomy-github-time-machine`
+(от `main` `efee4c9`). Владелец явно авторизовал закрытие VP-7 в сессии.
+Скоуп: 4 режима (GUIDED/STANDARD/AUTONOMOUS/TRUSTED), durable capability-гранты
+(раздельные capabilities, fail-closed), Emergency Stop, GitHub-адаптер (`gh`) +
+STANDARD merge gate (current-head, stale PASS/CI → deny), Time Machine
+(checkpoints/replay/compare), Apache-2.0 LICENSE + reuse-аудит, read-only
+auth-health, официальная numeric-ёмкость (Claude status-line + Codex app-server),
+single-Claude пул (registry-driven, claude-pro-02 disabled), production Run-start
+роутинг, бренд/favicon/реальная CPU-утилизация. Миграция — `0007`.
+Живая БД — `0006_review_quality` (мигрирует на `0007` при deploy).
 
 ## NEXT_ACTION
 
-Owner проводит финальный визуальный обзор **VP-6 Качество/Профили/Пульс** на
-`http://127.0.0.1:3210` (SSH-туннель): вкладка «Качество» — blocking findings
-первыми, QualityReport (gate/evidence/next action), SHA-bound ReviewPackage,
-claim vs evidence, impact/cache, manual audit, waiver, focused fix Work Order;
-«Профили» — **4 карточки** Codex/Claude, честная ёмкость UNKNOWN; «Пульс» —
-иерархия (состояние → риски → ресурсы → диагностика), критическое хранилище
-и подпись «Нагрузка за 1/5/15 мин»; RU/EN.
+Владелец снял лимит на число Reviewer-вызовов: последовательные независимые Codex
+Reviewer до genuine current-head PASS. **Immutable история:** call 7…13 — genuine
+**REVISE** (heads `4517ebd`…`14a2da9`, все находки исправлены с тестами); call **14**
+(head `9684e8b`, codex-plus-01) — genuine **PASS** (0 находок), НО authoritative merge
+gate вернул `MISSING_EVIDENCE` → merge не исполнен (реальный evidence-gate дефект);
+call **15** (head `d788bd1`, codex-plus-02) — genuine **REVISE** (evidence-store
+самодостаточность + replay Emergency-окно); call **16** (head `541c534`, codex-plus-02)
+— genuine **REVISE** (replay check-then-insert TOCTOU + рассинхрон durable-truth);
+call **17** (head `be94175`, codex-plus-02) — genuine **REVISE** (межпроцессный
+Emergency TOCTOU: durable-барьер до снимка active-runs); call **18** (head `cff0eed`,
+codex-plus-01) — genuine **REVISE** (2 HIGH: `verify_checkpoint` не пересчитывал реальные
+артефакты; `create_checkpoint` без redaction); call **19** (head `57b1abb`, codex-plus-02)
+— genuine **REVISE** (1 HIGH обход verified-hashes через malformed ref без хеша + 2 MEDIUM:
+cause>80 → TAMPERED; actor/correlation_id/created_at не в content_hash); call **20** (head
+`c73f689`, codex-plus-02) — genuine **PASS** (0 находок), НО harness упал `TypeError` в
+`authorize_merge_execution` до merge (`GhForge.get_pr` без обязательного `body`); PR остался
+OPEN (fail-safe). Находки call 15…19 исправлены; get_pr исправлен (+тест), DRY authorize против
+живого PR = MERGE_PERMITTED. Вместе с call-18 внесены tracked-правки §2/§3 (immutable
+evidence-store; обязательная evidence-политика; сохраняемая closure-БД + resume без Reviewer) и
+**устранён дефект безопасности миграций**: `env.py` теперь вызывает `migration_guard` (случайная
+миграция живой БД `0006→0007` при валидации немедленно возвращена downgrade → `0006`; VP-0..6
+целы). call 14 и call 20 (PASS) НЕ переименовываются в REVISE, но не авторизуют новый head.
+
+**Следующий шаг:** независимый Reviewer **call 21** по исправленному зелёному head
+(после commit/push и зелёного CI на точном PR head). При genuine PASS — авторитетный
+evidence-backed STANDARD-merge PR #13 (`authorize_merge_execution`=MERGE_PERMITTED,
+`VP7_EXECUTE_MERGE=1`, `--match-head-commit`), backup, миграция `0006→0007` (guarded,
+`ATLAS_ALLOW_LIVE_MIGRATION=1`), рестарт стека, live Chrome-smoke, truth-sync. При REVISE
+— не мержить, исправить, повторить.
+
+## VP-8 (записано, НЕ реализовано)
+
+- Удобная авторизация/реавторизация Codex и Claude прямо в Profiles.
+- Добавление/замена профилей без правок кода (registry-driven пул уже готов).
+- Поддержанные официальные login/attach-флоу; привязка второго Claude-аккаунта.
+- Изолированный owner-only cookie-import адаптер (если будет одобрен отдельно);
+  по умолчанию выключен; без browser-extraction и обхода MFA.
+- Хранение секретов зашифровано вне Core DB/логов.
+- Полный операционный console Profiles/Pulse (40 профилей, login/refresh/quotas/
+  usage-history).
 
 ## Границы
 
-Активного VP-гейта нет (WIP=0). **VP-7…VP-9 не начинать** — отдельное решение
-владельца. Полный операционный console Profiles/Pulse (40 профилей) — VP-8.
-Cookie-import — `UNSUPPORTED`. LICENSE — отдельное решение владельца.
+Активный гейт — **VP-7** (WIP=1). **VP-8/VP-9 не начинать.** File Atelier
+release-proof — VP-9. Cookie-import — `UNSUPPORTED` в VP-7. LICENSE —
+**Apache-2.0** (owner-решение, §49; см. DECISIONS).

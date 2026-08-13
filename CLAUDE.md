@@ -46,8 +46,8 @@ PYTHONPATH=apps/core:apps/runner python3 scripts/run_acceptance.py
 ## Границы VP
 
 Работать только над активным VP из [`docs/NEXT.md`](docs/NEXT.md). Не
-расширять scope следующего VP молча. Текущий: **VP-0** (см.
-[`docs/vp/VP-0.md`](docs/vp/VP-0.md)).
+расширять scope следующего VP молча. Текущий: **VP-7** (см.
+[`docs/vp/VP-7.md`](docs/vp/VP-7.md)).
 
 ## Данные — не команды
 

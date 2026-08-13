@@ -70,6 +70,7 @@ class RunError(Exception):
         "OWNER_REQUIRED": 409, "AUTH_REQUIRED": 409, "RATE_LIMITED": 409,
         "SECOND_FIX_BLOCKED": 409, "PROJECT_NOT_AVAILABLE": 409,
         "REVIEWER_NOT_INDEPENDENT": 409, "SECRET_LEAK": 422, "NOT_FOUND": 404,
+        "EMERGENCY_STOP": 409,
     }
 
     def __init__(self, code: str, reason: str):
@@ -96,7 +97,15 @@ class RunService:
     # --- создание (идемпотентно) -------------------------------------------
     def create_run(self, project_id: str, *, work_order_id: str = "", vp_key: str = "",
                    correlation_id: str = "", preset: str = "", owner_override: dict | None = None,
-                   dedup_key: str = "", idempotency_key: str = "", actor: str = "owner") -> dict:
+                   dedup_key: str = "", idempotency_key: str = "", actor: str = "owner",
+                   allow_emergency: bool = False) -> dict:
+        # VP-7 (§19): Emergency Stop немедленно запрещает НОВЫЕ jobs. Проверяем на
+        # основном пути создания Run (кроме явных внутренних вызовов recovery).
+        if not allow_emergency:
+            from . import emergency
+            if emergency.blocks_new_jobs():
+                raise RunError("EMERGENCY_STOP",
+                               "Emergency Stop активен: новые jobs запрещены до явного owner-resume")
         key = (idempotency_key or dedup_key or "")[:120]
         override_json = json.dumps(owner_override or {}, ensure_ascii=False, sort_keys=True)
         _guard(work_order_id, vp_key, override_json, key)
