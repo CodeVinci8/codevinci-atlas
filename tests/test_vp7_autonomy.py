@@ -502,6 +502,34 @@ class TestGithubAdapter(VP7Base):
         f5 = FakeGh([], {"mergeable": "MERGEABLE", "state": "OPEN", "mergeStateStatus": "CLEAN"})
         self.assertTrue(f5.mergeability(1)["mergeable"])
 
+    # --- call-20 fix: GhForge.get_pr строит PullRequest с body (иначе TypeError на
+    #     execution boundary до gate-решения — блок любого реального merge). ---
+    def test_ghforge_get_pr_builds_pullrequest_with_body(self):
+        import json as _j
+
+        from atlas_core.github_adapter import GhForge
+
+        class FakeGh(GhForge):
+            def __init__(self, payload):
+                self.repo = "a/b"; self._payload = payload
+
+            def _gh(self, *args, **kw):
+                class R:
+                    returncode = 0
+                out = R(); out.stdout = _j.dumps(self._payload); out.stderr = ""
+                return out
+
+        # body присутствует → переносится в dataclass
+        pr = FakeGh({"number": 13, "baseRefName": "main", "headRefName": "atlas/x",
+                     "headRefOid": "H", "title": "t", "body": "тело PR", "state": "open",
+                     "url": "u"}).get_pr(13)
+        self.assertEqual(pr.body, "тело PR")
+        self.assertEqual(pr.state, "OPEN")
+        # body ОТСУТСТВУЕТ в ответе gh → get_pr НЕ падает, body="" (регрессия call-20)
+        pr2 = FakeGh({"number": 13, "baseRefName": "main", "headRefName": "atlas/x",
+                      "headRefOid": "H", "title": "t", "state": "open", "url": "u"}).get_pr(13)
+        self.assertEqual(pr2.body, "")
+
     # --- call-11 audit (risk A): списание бюджета на ТОЙ ЖЕ version, что evaluate ---
     def test_consume_uses_evaluated_version_snapshot_no_toctou(self):
         """Между evaluate() и consume grant меняется (version бампается конкурентным

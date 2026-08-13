@@ -391,12 +391,16 @@ class GhForge:
 
     def get_pr(self, number: int) -> PullRequest | None:
         r = self._gh("pr", "view", str(number), "--repo", self.repo, "--json",
-                     "number,baseRefName,headRefName,headRefOid,title,state,url,mergeable")
+                     "number,baseRefName,headRefName,headRefOid,title,body,state,url,mergeable")
         if r.returncode != 0:
             return None
         d = json.loads(r.stdout)
+        # body обязателен в dataclass PullRequest — без него authorize_merge_execution
+        # (execution boundary) падал бы TypeError ДО gate-решения (не fail-open, но
+        # блокировал бы любой реальный merge). Берём фактический body PR (может быть "").
         return PullRequest(number=d["number"], base=d["baseRefName"], head_branch=d["headRefName"],
-                           head_sha=d["headRefOid"], title=d["title"], state=d["state"].upper(),
+                           head_sha=d["headRefOid"], title=d.get("title", ""),
+                           body=d.get("body", "") or "", state=d["state"].upper(),
                            url=d["url"])
 
     def checks(self, head_sha: str) -> dict:

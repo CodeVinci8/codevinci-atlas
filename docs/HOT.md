@@ -124,6 +124,13 @@
   (2) `cause`>80 → TAMPERED, единая канонизация `[:80]`; (3) actor/correlation_id/created_at
   не покрывались content_hash — теперь в `immutable_payload` (подмена → TAMPERED; #22
   переопределён как воспроизводимость). merge не исполнялся. call-7…19 immutable; NEXT — **call 20**.
+- **call 20** (head `c73f689`, codex-plus-02, независим, `VP7_EXECUTE_MERGE=1`) → genuine
+  **PASS** (0 находок, session present), Quality PASS. НО harness упал `TypeError` в
+  `authorize_merge_execution` ДО merge: `GhForge.get_pr` строил `PullRequest` без обязательного
+  `body`. PR остался OPEN (`merged=false`) — fail-safe. Реальный дефект **живого** merge-пути
+  (юнит-тесты на `LocalForge`). **Fix:** `get_pr` передаёт `body` (+тест). DRY authorize против
+  ЖИВОГО PR #13 = **MERGE_PERMITTED** (11/11). Tracked → PASS call 20 immutable, но не авторизует
+  новый head (как call 14); NEXT — **call 21**.
 - **Инцидент миграции (устранён).** При §4-валидации `alembic upgrade head` против
   живого каталога **случайно мигрировал живую БД `0006→0007`** — потому что `env.py` НЕ
   вызывал `migration_guard`. Немедленно возвращено `downgrade → 0006` (0007-таблицы были

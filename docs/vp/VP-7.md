@@ -507,6 +507,29 @@ payload) покрывают `actor`/`correlation_id`/`created_at` (`_iso`, ок�
 регрессия **463 OK**; acceptance **34/34**; секрет-скан ЧИСТО; `git diff --check` чист; live
 БД остаётся `0006`. call-7…19 immutable. NEXT: **call 20** по исправленному зелёному head.
 
+### call 20 — genuine PASS (head `c73f689`, codex-plus-02), НО harness упал на defect до merge
+
+Независимый Reviewer (codex-plus-02, read-only, session present, 17 файлов) на полном diff
+`c73f689` вернул genuine **PASS** (0 находок); Quality **PASS** (gate=none). Запуск с
+`VP7_EXECUTE_MERGE=1`. `reviewer_raw.json` в `var/artifacts/vp7/final_review/call-20/` —
+immutable evidence подлинного PASS.
+
+**НО** harness упал `TypeError` в `authorize_merge_execution` **до** любого merge-действия:
+`GhForge.get_pr` строил `PullRequest` без обязательного поля `body` (`github_adapter.py:398`).
+PR остался **OPEN** (`merged=false`) — fail-safe (падение до необратимого merge, без
+частичного слияния). Это реальный дефект **живого** merge-пути: юнит-тесты используют
+`LocalForge`, а `GhForge.get_pr` против реального `gh` не проверялся. **Fix:** `get_pr` теперь
+запрашивает и передаёт `body` (`d.get("body","")`); тест
+`test_ghforge_get_pr_builds_pullrequest_with_body` (body присутствует/отсутствует, без краха).
+После fix **DRY (read-only) `authorize_merge_execution` против ЖИВОГО PR #13 @ c73f689 =
+`MERGE_PERMITTED`** (все 11 условий OK): get_pr(body), live checks GREEN, mergeability CLEAN,
+evidence разрешимо. Merge-путь исправен.
+
+Это **tracked-правка** → genuine PASS call 20 остаётся immutable, но НЕ авторизует новый
+исправленный head (как call 14). Следующий genuine review — **call 21**. Валидация: регрессия
+**464 OK**; acceptance **34/34**; секрет-скан ЧИСТО; live БД остаётся `0006`. call-7…20
+immutable.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)
