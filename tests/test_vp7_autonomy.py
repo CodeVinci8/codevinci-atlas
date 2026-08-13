@@ -841,6 +841,51 @@ class TestGithubAdapter(VP7Base):
             base="main", environment="")
         self.assertTrue(d.permitted)  # caller base совпал с живым pr.base
 
+    # --- §3: восстановление авторизации merge из сохранённой closure-БД ----------
+    def test_closure_db_resume_authorizes_without_reviewer(self):
+        """Прерванный (технически) финальный вызов ВОЗОБНОВЛЯЕТ авторизацию merge из
+        сохранённой closure-БД: точные RP/QR/grant перечитываются по id, вердикт PASS
+        НЕ пересоздаётся и НЕ инъецируется, Reviewer НЕ вызывается. Manifest фиксирует
+        location/schema/checksum/safe row-counts; БД/manifest — 0600."""
+        import stat as _stat
+
+        from atlas_core.autonomy import create_grant
+        from atlas_core.db import session_scope
+        from atlas_core.merge_closure import (
+            prepare_closure_dir,
+            resume_authorization,
+            write_closure_manifest,
+        )
+        from atlas_core.orm import QualityReport
+        from sqlalchemy import func, select
+        sha, prn = self._open_pr()
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        rp, qr = self._persist_rp_qr(sha, "PASS")   # evidence-backed RP + PASS QR
+        # закрытие «первой (прерванной) попытки»: каталог + manifest, БД = текущая test-БД
+        closure_dir, resumed = prepare_closure_dir(self.data_dir / "final_review", "att-1")
+        self.assertFalse(resumed)
+        manifest = write_closure_manifest(
+            closure_dir, self.settings.db_path, review_package_id=rp,
+            quality_report_id=qr, grant_id=g["id"], delivery_id=None,
+            repo="acme/demo", base="main", head=sha, pr=prn,
+            schema="0007_autonomy_github_time_machine", project_id="p")
+        self.assertTrue(manifest["db_sha256"].startswith("sha256:"))
+        self.assertGreaterEqual(manifest["row_counts"]["review_packages"], 1)
+        # права: manifest 0600
+        self.assertEqual(_stat.S_IMODE(os.stat(closure_dir / "closure_manifest.json").st_mode), 0o600)
+        # snapshot числа QR до resume — resume НЕ должен создать новый QR
+        with session_scope() as s:
+            qr_before = s.execute(select(func.count()).select_from(QualityReport)).scalar()
+        # «свежий процесс»: повторно открываем сохранённую попытку и авторизуем
+        again, resumed2 = prepare_closure_dir(self.data_dir / "final_review", "att-1")
+        self.assertTrue(resumed2)                   # manifest есть → это resume
+        d = resume_authorization(again, forge=self.forge)
+        self.assertTrue(d.permitted, d.to_dict())   # MERGE_PERMITTED из сохранённой БД
+        with session_scope() as s:
+            qr_after = s.execute(select(func.count()).select_from(QualityReport)).scalar()
+        self.assertEqual(qr_before, qr_after)       # вердикт не пересоздан/не инъецирован
+
     # --- call-7 REVISE fix (HIGH): gate-условия выводятся из durable RP, не True ---
     def test_authoritative_baseline_derived_from_rp(self):
         from atlas_core.autonomy import create_grant
@@ -1316,6 +1361,51 @@ class TestEvidenceGate(VP7Base):
         self.assertFalse(d.permitted)   # rp.head HEAD1 != expected HEAD2 → STALE
         self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
 
+    # --- §2: immutable evidence-store ---------------------------------------
+    def test_evidence_register_identical_repeat_is_noop(self):
+        """Повторная регистрация того же файла → та же запись, без мутации."""
+        from atlas_core.reviewpkg import list_merge_evidence, register_merge_evidence
+        evdir = self.data_dir / "evidence"; evdir.mkdir(exist_ok=True)
+        p = evdir / "im1.txt"; p.write_text("evidence-immutable\n", encoding="utf-8")
+        e = [{"ref": "ev:im", "path": str(p), "kind": "artifact"}]
+        r1 = register_merge_evidence("HEAD1", e)
+        before = list_merge_evidence("HEAD1")
+        r2 = register_merge_evidence("HEAD1", e)   # identical repeat
+        after = list_merge_evidence("HEAD1")
+        self.assertEqual(r1[0]["id"], r2[0]["id"])
+        self.assertEqual(r1[0]["sha256"], r2[0]["sha256"])
+        self.assertEqual(before, after)            # запись не тронута
+        self.assertEqual(len(after), 1)
+
+    def test_evidence_register_changed_file_conflicts(self):
+        """Подмена файла + повторная регистрация → EVIDENCE_IMMUTABLE_CONFLICT;
+        исходный sha сохранён (новые байты не «благословлены»)."""
+        from atlas_core.reviewpkg import (
+            EvidenceConflictError,
+            list_merge_evidence,
+            register_merge_evidence,
+        )
+        evdir = self.data_dir / "evidence"; evdir.mkdir(exist_ok=True)
+        p = evdir / "im2.txt"; p.write_text("v1\n", encoding="utf-8")
+        e = [{"ref": "ev:im2", "path": str(p), "kind": "artifact"}]
+        r1 = register_merge_evidence("HEAD1", e)
+        orig_sha = r1[0]["sha256"]
+        p.write_text("v2-tampered\n", encoding="utf-8")     # подмена
+        with self.assertRaises(EvidenceConflictError) as ctx:
+            register_merge_evidence("HEAD1", e)
+        self.assertEqual(ctx.exception.code, "EVIDENCE_IMMUTABLE_CONFLICT")
+        self.assertEqual(list_merge_evidence("HEAD1")[0]["sha256"], orig_sha)  # цел
+
+    def test_evidence_register_changed_path_conflicts(self):
+        """Другой path под тем же ref → конфликт (baseline не переустанавливается)."""
+        from atlas_core.reviewpkg import EvidenceConflictError, register_merge_evidence
+        evdir = self.data_dir / "evidence"; evdir.mkdir(exist_ok=True)
+        p1 = evdir / "a.txt"; p1.write_text("same\n", encoding="utf-8")
+        p2 = evdir / "b.txt"; p2.write_text("same\n", encoding="utf-8")
+        register_merge_evidence("HEAD1", [{"ref": "ev:im3", "path": str(p1)}])
+        with self.assertRaises(EvidenceConflictError):
+            register_merge_evidence("HEAD1", [{"ref": "ev:im3", "path": str(p2)}])
+
 
 # ---------------------------------------------------------------------------
 class TestDeliveryPersistence(VP7Base):
@@ -1425,12 +1515,22 @@ class TestDeliveryPersistence(VP7Base):
 
 # ---------------------------------------------------------------------------
 class TestTimeMachine(VP7Base):
+    def _ckpt_artifact(self, name="ckpt_artifact.txt", content="checkpoint-artifact\n"):
+        """Реальный файл артефакта (абсолютный путь + настоящий sha256) для честной
+        сверки verify_checkpoint (call-18 finding 1). Абсолютный путь → root не нужен."""
+        from atlas_core.reviewpkg import sha256_file
+        p = self.data_dir / "ckpt_artifacts" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p, {"path": str(p.resolve()), "sha": sha256_file(p)}
+
     def _ckpt(self, **over):
         from atlas_core.timemachine import CheckpointInputs, create_checkpoint
+        _p, art = self._ckpt_artifact()
         base = dict(project_id="p", vp_key="VP-7", run_id="r1", db_revision="0007",
                     branch="atlas/vp-7-src", base_sha="BASE", head_sha="HEAD",
                     worktree_status="clean", patch_hash="sha256:pp",
-                    artifact_hashes=[{"path": "a", "sha": "sha256:aa"}],
+                    artifact_hashes=[art],
                     profile_alias="claude-pro-01", model="claude", effort="medium",
                     session_ids=["sess-1"], grant_hash="sha256:g", cause="post-review")
         base.update(over)
@@ -1454,6 +1554,92 @@ class TestTimeMachine(VP7Base):
         blob = json.dumps(self._ckpt()).lower()
         for marker in ("@", "token", "cookie", "password", "transcript", "/home/", "/root/"):
             self.assertNotIn(marker, blob)
+
+    # --- call-18 finding 1: verify пересчитывает РЕАЛЬНЫЕ артефакты ------------
+    def test_altered_artifact_invalidates_checkpoint(self):
+        """Подмена содержимого зарегистрированного артефакта → ARTIFACT_ALTERED,
+        хотя строка БД (content_hash) не тронута."""
+        from atlas_core.timemachine import verify_checkpoint
+        p, art = self._ckpt_artifact(name="mut.txt", content="v1\n")
+        cp = self._ckpt(artifact_hashes=[art])
+        self.assertTrue(verify_checkpoint(cp["id"])[0])
+        p.write_text("v2-tampered\n", encoding="utf-8")   # артефакт изменён, БД цела
+        ok, reason = verify_checkpoint(cp["id"])
+        self.assertFalse(ok)
+        self.assertEqual(reason, "ARTIFACT_ALTERED")
+
+    def test_deleted_artifact_invalidates_checkpoint(self):
+        """Удаление зарегистрированного артефакта → ARTIFACT_MISSING (checkpoint
+        больше не «verified», §21)."""
+        from atlas_core.timemachine import verify_checkpoint
+        p, art = self._ckpt_artifact(name="del.txt", content="present\n")
+        cp = self._ckpt(artifact_hashes=[art])
+        self.assertTrue(verify_checkpoint(cp["id"])[0])
+        p.unlink()
+        ok, reason = verify_checkpoint(cp["id"])
+        self.assertFalse(ok)
+        self.assertEqual(reason, "ARTIFACT_MISSING")
+
+    def test_test_and_evidence_refs_with_path_are_rehashed(self):
+        """Файловые ссылки в test_refs/evidence_refs (path+hash) тоже пересчитываются."""
+        from atlas_core.timemachine import verify_checkpoint
+        pt, at = self._ckpt_artifact(name="t.txt", content="test-out\n")
+        pe, ae = self._ckpt_artifact(name="e.txt", content="evidence\n")
+        cp = self._ckpt(artifact_hashes=[],
+                        test_refs=[{"name": "unit", "path": at["path"], "hash": at["sha"]}],
+                        evidence_refs=[{"ref": "ev1", "path": ae["path"], "sha": ae["sha"]}])
+        self.assertTrue(verify_checkpoint(cp["id"])[0])
+        pe.write_text("evidence-tampered\n", encoding="utf-8")
+        self.assertEqual(verify_checkpoint(cp["id"]), (False, "ARTIFACT_ALTERED"))
+
+    def test_replay_refuses_altered_artifact_checkpoint(self):
+        """replay fail-closed на изменённом артефакте (verified hashes до создания
+        ветки/Run)."""
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import InvalidCheckpointError, replay
+        repo, base, head = self._repo_with_base_head()
+        p, art = self._ckpt_artifact(name="rp.txt", content="orig\n")
+        cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head,
+                        artifact_hashes=[art])
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
+        p.write_text("tampered\n", encoding="utf-8")
+        with self.assertRaises(InvalidCheckpointError):
+            replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        # ветка не создана
+        self.assertNotEqual(
+            subprocess.run(["git", "-C", repo, "branch", "--list", "atlas/replay-*"],
+                           capture_output=True, text=True).returncode, 1)
+
+    # --- call-18 finding 2: create_checkpoint отвергает секреты в durable-полях --
+    def test_create_checkpoint_rejects_secret_fields(self):
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint
+        from atlas_core.redaction import SECRET_MARKER
+        from atlas_core.timemachine import TimeMachineError
+        from sqlalchemy import select
+        # набор: маркер, cookie, email, github-token, raw auth path, jwt — по разным полям
+        cases = [
+            dict(cause=f"note {SECRET_MARKER}"),
+            dict(session_ids=["Cookie: sessionKey=abcdef0123456789abcd"]),
+            dict(handoff_ref="user@example.com"),
+            dict(profile_alias="ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
+            dict(evidence_refs=["/root/.config/codex/profiles/codex/auth.json"]),
+            dict(artifact_hashes=[{"path": "/x/profiles/claude/creds", "sha": "sha256:z"}]),
+        ]
+        for over in cases:
+            with self.assertRaises(TimeMachineError) as ctx:
+                self._ckpt(**over)
+            self.assertEqual(ctx.exception.code, "SECRET_IN_CHECKPOINT")
+        # ни одна секрет-содержащая строка не попала в durable-состояние
+        with session_scope() as s:
+            for row in s.execute(select(Checkpoint)).scalars().all():
+                import json as _json
+                blob = _json.dumps(row.to_dict())
+                self.assertNotIn(SECRET_MARKER, blob)
+                self.assertNotIn("ghp_", blob)
+                self.assertNotIn("auth.json", blob)
 
     def _repo_with_base_head(self):
         d = tempfile.mkdtemp(prefix="atlas-tm-")

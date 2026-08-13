@@ -408,6 +408,69 @@ durable `is_active()`-recheck (в любом процессе) увидит acti
 ЧИСТО; live БД остаётся `0006`. call-7…17 immutable. NEXT: **call 18** по исправленному
 зелёному head.
 
+### call 18 — genuine REVISE (head `cff0eed`, codex-plus-01)
+
+Независимый Reviewer (codex-plus-01, read-only, session present, 17 файлов) на полном
+diff `cff0eed` вернул genuine **REVISE** (2 находки, HIGH). Артефакты в
+`var/artifacts/vp7/final_review/call-18/` (immutable). merge НЕ исполнялся.
+
+**Находка 1 (HIGH) — Time Machine `verify_checkpoint`.** Проверялся только `content_hash`
+строки БД, но НЕ пересчитывались `artifact_hashes`/`test_refs`/`evidence_refs` по
+фактическим файлам: после изменения/удаления артефакта checkpoint оставался «verified»
+(нарушение §21 «verified hashes»). **Fix:** `verify_checkpoint` теперь пересчитывает
+sha256 каждого объявленного файлового артефакта (по всем трём коллекциям, с path):
+отсутствует → `ARTIFACT_MISSING`, изменён → `ARTIFACT_ALTERED` = invalid evidence.
+Относительные пути разрешаются от доверенного repo проекта (replay — от replay-repo).
+Тесты: `test_altered_artifact_invalidates_checkpoint`,
+`test_deleted_artifact_invalidates_checkpoint`,
+`test_test_and_evidence_refs_with_path_are_rehashed`,
+`test_replay_refuses_altered_artifact_checkpoint`.
+
+**Находка 2 (HIGH) — `create_checkpoint` без redaction/валидации.** Внутренний caller мог
+записать token/email/cookie/transcript/raw-auth-path в durable checkpoint (тест
+`no_secrets` покрывал лишь безопасную фикстуру). **Fix:** `create_checkpoint` fail-closed
+сканирует КАЖДОЕ durable-поле (`redaction.is_sensitive`) и отвергает
+(`SECRET_IN_CHECKPOINT`) до записи — секрет в checkpoint не попадает ни для одного
+caller. Тест `test_create_checkpoint_rejects_secret_fields` (marker/cookie/email/token/
+raw-auth-path по разным полям + проверка чистоты durable-состояния).
+
+**Tracked-правки того же коммита (§2/§3, до call 19):**
+
+* **Immutable evidence-store (§2):** `register_merge_evidence` больше не переписывает
+  существующий `(head_sha, ref)`. Идентичный повтор — идемпотентный no-op; иной path/
+  sha/kind/size — `EvidenceConflictError`(`EVIDENCE_IMMUTABLE_CONFLICT`), исходная строка
+  цела (подмена файла не «благословляет» новые байты; baseline существующего RP не
+  переустановить). Тесты `test_evidence_register_identical_repeat_is_noop`,
+  `…changed_file_conflicts`, `…changed_path_conflicts`.
+* **Обязательная evidence-политика финального review (§2):** `collect_and_register_evidence`
+  использует явный `_REQUIRED_EVIDENCE` (не «какие файлы нашлись»); отсутствие любого
+  обязательного evidence → `EvidencePolicyError` **до** provider-вызова; для каждого
+  фиксируются path-safe id/sha/size/source/timestamp/head; путь-credential отвергается.
+* **Сохраняемая closure-БД (§3):** `run_vp7_final_review.py` больше не использует анонимный
+  `mkdtemp`. Модуль `merge_closure`: attempt-scoped каталог `0700`, БД/manifest `0600`,
+  never-overwrite, manifest (location/schema/checksum/safe row-counts + точные
+  RP/QR/grant/delivery). `resume_authorization` восстанавливает авторизацию merge из
+  сохранённой БД **без** повторного Reviewer-вызова и **без** инъекции вердикта. Тест
+  `test_closure_db_resume_authorizes_without_reviewer`.
+
+**Устранённый дефект безопасности миграций (call-19 F).** При §4-валидации обнаружено, что
+`migrations/env.py` **не вызывал** `migration_guard` — guard существовал лишь как
+тест-хелпер, поэтому raw `alembic upgrade` против живого каталога проходил молча. При
+проверке это привело к **случайной миграции живой БД `0006→0007`; она немедленно
+возвращена downgrade → `0006`** (0007-таблицы были пусты, VP-0..6 данные не затронуты).
+**Fix:** `assert_live_migration_allowed()` вызывается из `env.py` для каждого запуска
+alembic — живой production data_dir/DB мигрируется ТОЛЬКО при `ATLAS_ALLOW_LIVE_MIGRATION=1`
+(guarded deploy §8); изолированные/CI/dev-цели свободны. Точная прежняя команда теперь
+`LiveMigrationRefused` (exit 1), живая БД остаётся `0006`. Тесты
+`test_env_guard_refuses_live_target_without_flag`, `…allows_live_with_deploy_flag`,
+`…allows_isolated_target`.
+
+Все находки исправлены с тестами; **merge не исполнялся, PASS не фабриковался**. call 14
+НЕ переименовывается в REVISE. Валидация: регрессия **459 OK**; acceptance **34/34**;
+миграции empty→0007 / 0006→0007 / downgrade→0006→re-upgrade; live-guard REFUSE подтверждён;
+секрет-скан durable/artifacts ЧИСТО; `git diff --check` чист; live БД остаётся `0006`.
+call-7…18 immutable. NEXT: **call 19** по исправленному зелёному head.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

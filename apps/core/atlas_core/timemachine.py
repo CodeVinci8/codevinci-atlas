@@ -15,13 +15,15 @@ verify хешей, **без credentials/transcripts**; destructive rollback не
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
-from . import audit, autonomy, emergency
+from . import audit, autonomy, emergency, redaction
 from .autonomy import Capability
 from .db import session_scope
 from .ids import new_id
@@ -75,10 +77,47 @@ def _payload_from_inputs(i: CheckpointInputs) -> dict:
     }
 
 
+def _reject_secrets(i: CheckpointInputs, *, actor: str, correlation_id: str) -> None:
+    """Fail-closed §30 (call-18 finding 2): ни одно durable-поле checkpoint не
+    должно содержать секрет, email, cookie, transcript-маркер или raw auth/
+    credential/profile path. Проверяем КАЖДОЕ поле (не только фикстуру) ДО записи и
+    **отвергаем**, а не молча редактируем — immutable content-addressed запись не
+    имеет права хранить секрет ни для одного внутреннего caller."""
+    def _check(label: str, value: str | None) -> None:
+        if value and redaction.is_sensitive(str(value)):
+            raise TimeMachineError(
+                "SECRET_IN_CHECKPOINT",
+                f"поле {label} содержит потенциальный секрет/raw auth path — "
+                "checkpoint отклонён (§30)")
+    _check("actor", actor)
+    _check("correlation_id", correlation_id)
+    for label in ("project_id", "vp_key", "work_order_id", "run_id", "db_revision",
+                  "branch", "base_sha", "head_sha", "worktree_status", "patch_hash",
+                  "profile_alias", "model", "effort", "grant_id", "grant_hash",
+                  "handoff_ref", "cause"):
+        _check(label, getattr(i, label))
+    for j, sid in enumerate(i.session_ids or []):
+        _check(f"session_ids[{j}]", str(sid))
+    for j, ev in enumerate(i.evidence_refs or []):
+        if isinstance(ev, dict):
+            _check(f"evidence_refs[{j}].ref", str(ev.get("ref", "")))
+            _check(f"evidence_refs[{j}].path", str(ev.get("path", "")))
+        else:
+            _check(f"evidence_refs[{j}]", str(ev))
+    for j, a in enumerate(i.artifact_hashes or []):
+        if isinstance(a, dict):
+            _check(f"artifact_hashes[{j}].path", str(a.get("path", "")))
+    for j, t in enumerate(i.test_refs or []):
+        if isinstance(t, dict):
+            _check(f"test_refs[{j}].name", str(t.get("name", "")))
+            _check(f"test_refs[{j}].path", str(t.get("path", "")))
+
+
 def create_checkpoint(i: CheckpointInputs, *, actor: str = "core",
                       correlation_id: str = "") -> dict:
     """Создать immutable content-addressed checkpoint."""
     import json as _json
+    _reject_secrets(i, actor=actor, correlation_id=correlation_id)
     ch = content_hash(_payload_from_inputs(i))
     cid = new_id("ckpt")
     with session_scope() as s:
@@ -118,9 +157,70 @@ def list_checkpoints(*, project_id: str | None = None, limit: int = 100) -> list
         return [r.to_dict() for r in rows]
 
 
-def verify_checkpoint(checkpoint_id: str) -> tuple[bool, str]:
-    """Пересчитать content_hash над immutable-payload и сверить с хранимым.
-    Расхождение → tamper/протухший checkpoint = **invalid evidence**."""
+def _sha256_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _resolve_artifact_path(raw: str, root: str | None) -> Path:
+    """Разрешить путь артефакта: абсолютный — как есть; относительный — от
+    доверенного ``root`` (repo checkpoint), иначе от cwd."""
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return (Path(root) / p) if root else p
+
+
+def _referenced_artifacts(cp: dict) -> list[tuple[str, str, str]]:
+    """Список ``(label, path, expected_sha)`` для КАЖДОЙ записи checkpoint,
+    объявляющей файловый ``path`` c ожидаемым хешем — по всем трём коллекциям
+    (``artifact_hashes``/``test_refs``/``evidence_refs``). Чисто логические ссылки
+    (``test_refs`` без path, строковые ``evidence_refs``) файлового артефакта не
+    имеют и покрываются только ``content_hash`` (их значение нельзя изменить, не
+    сломав content_hash)."""
+    out: list[tuple[str, str, str]] = []
+    for a in cp.get("artifact_hashes", []) or []:
+        if isinstance(a, dict) and a.get("path") and a.get("sha"):
+            out.append(("artifact", str(a["path"]), str(a["sha"])))
+    for t in cp.get("test_refs", []) or []:
+        if isinstance(t, dict) and t.get("path") and (t.get("hash") or t.get("sha")):
+            out.append(("test", str(t["path"]), str(t.get("hash") or t.get("sha"))))
+    for e in cp.get("evidence_refs", []) or []:
+        if isinstance(e, dict) and e.get("path") and (e.get("sha") or e.get("hash")):
+            out.append(("evidence", str(e["path"]), str(e.get("sha") or e.get("hash"))))
+    return out
+
+
+def _verify_referenced_artifacts(cp: dict, root: str | None) -> tuple[bool, str]:
+    """Пересчитать sha256 КАЖДОГО объявленного файлового артефакта checkpoint и
+    сверить с записанным (call-18 finding 1). Отсутствующий файл → ``ARTIFACT_MISSING``,
+    изменённый → ``ARTIFACT_ALTERED``. Это делает «verified hashes» §21 фактическим,
+    а не сверкой строки БД самой с собой: удаление/подмена реального артефакта теперь
+    инвалидирует checkpoint (INVALID_EVIDENCE)."""
+    for _label, raw, expected in _referenced_artifacts(cp):
+        p = _resolve_artifact_path(raw, root)
+        if not p.exists() or not p.is_file():
+            return False, "ARTIFACT_MISSING"
+        try:
+            actual = _sha256_file(p)
+        except OSError:
+            return False, "ARTIFACT_MISSING"
+        if actual != expected:
+            return False, "ARTIFACT_ALTERED"
+    return True, ""
+
+
+def verify_checkpoint(checkpoint_id: str, *, root: str | None = None,
+                      verify_artifacts: bool = True) -> tuple[bool, str]:
+    """Проверить целостность checkpoint. Два уровня:
+
+    1. пересчёт ``content_hash`` над immutable-payload (tamper строки БД → ``TAMPERED``);
+    2. **пересчёт реальных файловых артефактов** по записанным хешам (call-18
+       finding 1): изменённый/удалённый артефакт → ``ARTIFACT_ALTERED``/
+       ``ARTIFACT_MISSING`` = **invalid evidence** (§21 «verified hashes»).
+
+    Относительные пути артефактов разрешаются от ``root`` (по умолчанию — доверенный
+    repo проекта checkpoint), иначе от cwd. ``verify_artifacts=False`` оставляет
+    только проверку content_hash (для контекстов без доступа к дереву артефактов)."""
     with session_scope() as s:
         row = s.get(Checkpoint, checkpoint_id)
         if row is None:
@@ -128,11 +228,20 @@ def verify_checkpoint(checkpoint_id: str) -> tuple[bool, str]:
         recomputed = content_hash(row.immutable_payload())
         if recomputed != row.content_hash:
             return False, "TAMPERED"
-    return True, ""
+        cp = row.to_dict()
+    if not verify_artifacts or not _referenced_artifacts(cp):
+        return True, ""
+    art_root = root
+    if art_root is None:
+        try:
+            art_root = _trusted_repo_path(cp.get("project_id") or None)
+        except Exception:
+            art_root = None
+    return _verify_referenced_artifacts(cp, art_root)
 
 
-def _verify_or_raise(checkpoint_id: str) -> dict:
-    ok, reason = verify_checkpoint(checkpoint_id)
+def _verify_or_raise(checkpoint_id: str, *, root: str | None = None) -> dict:
+    ok, reason = verify_checkpoint(checkpoint_id, root=root)
     if not ok:
         audit.record("checkpoint.invalid", f"ckpt={checkpoint_id} reason={reason}")
         raise InvalidCheckpointError(reason)
@@ -244,7 +353,9 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
     сравнение». Grant должен разрешать ``repo_write`` в выведенном scope через
     :func:`autonomy.evaluate`. Emergency Stop (§19) запрещает replay как создание
     нового job."""
-    cp = _verify_or_raise(checkpoint_id)
+    # verified hashes (§21): относительные пути артефактов checkpoint разрешаются от
+    # replay-repo; изменённый/удалённый артефакт → InvalidCheckpointError (fail-closed).
+    cp = _verify_or_raise(checkpoint_id, root=repo_path)
 
     # Emergency Stop: replay создаёт новый Run → запрещён при активном стопе.
     if emergency.blocks_new_jobs():

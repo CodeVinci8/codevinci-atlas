@@ -478,11 +478,16 @@ class VP7:
     def c22_23_checkpoint(self):
         from atlas_core.db import session_scope
         from atlas_core.orm import Checkpoint
+        from atlas_core.reviewpkg import sha256_file
         from atlas_core.timemachine import CheckpointInputs, create_checkpoint, verify_checkpoint
+        # call-18 finding 1: verify_checkpoint пересчитывает РЕАЛЬНЫЙ артефакт →
+        # фикстура ссылается на настоящий файл с настоящим sha (не placeholder).
+        _artdir = Path(tempfile.mkdtemp(prefix="atlas-ckpt-")); _artf = _artdir / "artifact.txt"
+        _artf.write_text("checkpoint-artifact\n", encoding="utf-8")
         ci = CheckpointInputs(project_id="proj_v7", vp_key="VP-7", run_id="run_es",
                               db_revision="0007", branch="atlas/vp-7-a", base_sha=self.seed,
                               head_sha="HEADX", worktree_status="clean", patch_hash="sha256:p",
-                              artifact_hashes=[{"path": "a", "sha": "sha256:aa"}],
+                              artifact_hashes=[{"path": str(_artf), "sha": sha256_file(_artf)}],
                               profile_alias="claude-pro-01", model="claude", effort="medium",
                               session_ids=["sess-abc"], grant_hash="sha256:g",
                               test_refs=[{"name": "unit", "hash": "sha256:t"}],

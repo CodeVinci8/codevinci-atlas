@@ -33,6 +33,44 @@ def _real(p: str) -> str:
         return p
 
 
+def is_live_target() -> bool:
+    """True, если текущие настройки (``ATLAS_DATA_DIR``/config) указывают на живой
+    production data_dir или на живой файл БД (по пути или inode)."""
+    from .settings import load_settings
+    s = load_settings()
+    data_dir = _real(s.data_dir)
+    if data_dir in {_real(p) for p in LIVE_DATA_DIRS}:
+        return True
+    try:
+        db_path = s.db_path
+        if os.path.exists(LIVE_DB) and os.path.exists(db_path) and os.path.samefile(db_path, LIVE_DB):
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def assert_live_migration_allowed(*, purpose: str = "migration") -> None:
+    """Fail-closed guard на границе alembic ``env.py`` (call-19 F): если цель миграции
+    — живой production data_dir/DB, миграция допускается ТОЛЬКО при явном
+    ``ATLAS_ALLOW_LIVE_MIGRATION=1`` (авторизованный deploy, отвечающий за backup-first
+    путь §8). Иначе — :class:`LiveMigrationRefused`.
+
+    В отличие от :func:`assert_isolated` (строгая тест-политика, требующая явный
+    изолированный ``ATLAS_DATA_DIR``), этот guard блокирует **только живую цель** и не
+    мешает изолированным/CI/dev-миграциям (temp data_dir), поэтому его безопасно
+    вызывать из ``env.py`` для КАЖДОГО запуска alembic. Именно этот путь раньше был
+    незащищён: ``env.py`` не звал guard, и raw ``alembic upgrade`` против живого
+    каталога проходил молча."""
+    if os.environ.get(ALLOW_ENV) == "1":
+        return  # явная авторизованная живая миграция (deploy сам делает backup)
+    if is_live_target():
+        raise LiveMigrationRefused(
+            f"{purpose}: ОТКАЗ мигрировать живой production data_dir/DB без "
+            f"{ALLOW_ENV}=1. Живая миграция допустима только на guarded backup-first "
+            "пути deploy (§8).")
+
+
 def assert_isolated(*, purpose: str = "migration-test") -> str:
     """Убедиться, что текущий ``ATLAS_DATA_DIR`` изолирован (не живая БД).
 

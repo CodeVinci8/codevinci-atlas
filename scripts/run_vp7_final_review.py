@@ -134,8 +134,10 @@ def run_fresh_acceptance() -> dict:
             "log_tail": (r.stdout or "")[-300:]}
 
 
-# Кандидаты реальных evidence-файлов (регистрируются только существующие).
-_EVIDENCE_CANDIDATES: list[tuple[str, str]] = [
+# ОБЯЗАТЕЛЬНАЯ evidence-политика финального review (§2): набор фиксирован и НЕ
+# сжимается до «какие файлы оказались на диске». Отсутствие любого обязательного
+# evidence → STOP до provider-вызова (а не тихий silent-shrink).
+_REQUIRED_EVIDENCE: list[tuple[str, str]] = [
     ("ev:vp7-acceptance", "var/artifacts/vp7/acceptance_matrix.json"),
     ("ev:vp7-accept-evidence", "var/artifacts/vp7/evidence_sha256.json"),
     ("ev:chrome-manifest", "var/artifacts/vp7/chrome/manifest_sha256.json"),
@@ -143,20 +145,37 @@ _EVIDENCE_CANDIDATES: list[tuple[str, str]] = [
 ]
 
 
+class EvidencePolicyError(Exception):
+    """Обязательное финальное evidence отсутствует/небезопасно — provider не вызывается."""
+
+
 def collect_and_register_evidence(head: str) -> tuple[list[str], list[dict], list[dict]]:
-    """Зарегистрировать реальные evidence-файлы под ``head`` в durable store
+    """Зарегистрировать ОБЯЗАТЕЛЬНЫЕ evidence-файлы под ``head`` в durable store
     (изолированная 0007-БД) и вернуть ``(evidence_refs, artifact_hashes, details)``.
-    Регистрируются ТОЛЬКО существующие файлы (fail-closed: несуществующее evidence
-    не объявляется в RP, иначе gate его не разрешит)."""
+
+    §2: политика явная — регистрируется весь ``_REQUIRED_EVIDENCE``; отсутствие
+    любого обязательного файла → :class:`EvidencePolicyError` (fail-closed до provider,
+    без молчаливого сжатия набора). Для каждого evidence фиксируются path-safe id,
+    sha256, size, source, timestamp и reviewed head. Prompt/response/transcript/token/
+    email/cookie/credential-path НЕ хранятся; путь-credential отвергается (§30)."""
+    from atlas_core.redaction import is_sensitive
     from atlas_core.reviewpkg import register_merge_evidence, sha256_file
+    missing = [(ref, rel) for ref, rel in _REQUIRED_EVIDENCE if not (_ROOT / rel).is_file()]
+    if missing:
+        raise EvidencePolicyError(
+            "обязательное финальное evidence отсутствует: "
+            + ", ".join(f"{ref} ({rel})" for ref, rel in missing))
+    ts = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
     entries, details = [], []
-    for ref, rel in _EVIDENCE_CANDIDATES:
-        p = _ROOT / rel
-        if p.exists() and p.is_file():
-            entries.append({"ref": ref, "path": str(p), "kind": "artifact"})
-            details.append({"ref": ref, "path": str(p.resolve()),
-                            "sha256": sha256_file(p), "source": rel})
-    rows = register_merge_evidence(head, entries) if entries else []
+    for ref, rel in _REQUIRED_EVIDENCE:
+        p = (_ROOT / rel).resolve()
+        if is_sensitive(str(p)):
+            raise EvidencePolicyError(f"evidence path похож на секрет/credential: {ref}")
+        entries.append({"ref": ref, "path": str(p), "kind": "artifact"})
+        details.append({"ref": ref, "path": str(p), "sha256": sha256_file(p),
+                        "size_bytes": p.stat().st_size, "source": rel,
+                        "timestamp": ts, "head": head})
+    rows = register_merge_evidence(head, entries)
     refs = [e["ref"] for e in entries]
     arts = [{"path": r["path"], "sha": r["sha256"]} for r in rows]
     return refs, arts, details
@@ -249,10 +268,20 @@ def main():
     injected_findings = json.loads(os.environ.get("VP7_REVIEWER_FINDINGS", "[]"))
     old_findings = json.loads(os.environ.get("VP7_OLD_FINDINGS", "[]"))
 
-    # Изолированная мигрированная 0007-БД для ReviewPackage/QualityReport (НЕ живая).
+    # Сохраняемая (не анонимная) call/attempt-scoped 0007-БД закрытия (§3): строгие
+    # права, manifest, never-overwrite. Позволяет ВОЗОБНОВИТЬ авторизацию merge из
+    # сохранённой БД без повторного Reviewer-вызова.
+    from atlas_core.merge_closure import ClosureError, prepare_closure_dir
     os.environ["ATLAS_CONFIG_FILE"] = "/nonexistent.yaml"
-    dd = tempfile.mkdtemp(prefix="atlas-vp7-final-")
+    attempt = os.environ.get("VP7_ATTEMPT") or _now().strftime("%Y%m%dT%H%M%S%fZ")
+    try:
+        closure_dir, _resumed = prepare_closure_dir(ART, attempt)
+    except ClosureError as exc:
+        print(f"  BLOCKER: closure-каталог конфликтует ({exc}). Provider не вызывается.")
+        return {"ok": False, "blocker": "closure dir conflict"}
+    dd = str(closure_dir)
     os.environ["ATLAS_DATA_DIR"] = dd
+    closure_db = closure_dir / "atlas.db"
     venv = _ROOT / ".venv" / "bin"
     mig = sh([str(venv / "alembic"), "upgrade", "head"], cwd=str(_ROOT),
              env={**os.environ, "PATH": f"{venv}:{os.environ.get('PATH', '')}",
@@ -285,9 +314,14 @@ def main():
     os.chmod(diff_file, 0o644)
     print(f"  Полный diff: {len(files)} файлов, +{ins}/-{dele}, {len(full_diff)} байт → {diff_file.name}")
 
-    # Durable-регистрация реальных evidence-файлов под точным head (§2/§3): факты
-    # gate выводятся из этого store + пересчёта файлов, не из хардкода.
-    ev_refs, ev_arts, ev_details = collect_and_register_evidence(head)
+    # Durable-регистрация ОБЯЗАТЕЛЬНЫХ evidence-файлов под точным head (§2/§3): факты
+    # gate выводятся из этого store + пересчёта файлов, не из хардкода. Отсутствие
+    # обязательного evidence → fail-closed до provider-вызова.
+    try:
+        ev_refs, ev_arts, ev_details = collect_and_register_evidence(head)
+    except EvidencePolicyError as exc:
+        print(f"  BLOCKER: {exc}. Provider не вызывается.")
+        return {"ok": False, "blocker": "required evidence missing"}
     print(f"  evidence зарегистрировано: {len(ev_refs)} ссылок → {[d['ref'] for d in ev_details]}")
 
     # acceptance-матрица RP из РЕАЛЬНЫХ результатов (не хардкод счётчиков).
@@ -402,7 +436,24 @@ def main():
             message="VP-7: squash-merge после независимого current-head PASS")
         print(f"  MERGED: {merged_result}")
 
+    # Зафиксировать сохраняемый closure-manifest (§3): точные RP/QR/grant/delivery,
+    # schema, checksum, безопасные row-counts. Позволяет возобновить авторизацию merge
+    # из этой БД без повторного Reviewer-вызова.
+    from atlas_core.deliveries import list_deliveries
+    from atlas_core.merge_closure import write_closure_manifest
+    _dels = [d for d in list_deliveries(project_id="proj_vp7") if d.get("head_sha") == head]
+    delivery_id = _dels[0]["id"] if _dels else None
+    closure_manifest = write_closure_manifest(
+        closure_dir, closure_db, review_package_id=pkg["id"],
+        quality_report_id=outcome.report["id"], grant_id=grant["id"],
+        delivery_id=delivery_id, repo=repo, base=base, head=head, pr=pr,
+        schema="0007_autonomy_github_time_machine", project_id="proj_vp7",
+        environment="atlas-main")
+    print(f"  closure-БД сохранена: {closure_dir.name} "
+          f"(schema={closure_manifest['schema_version']} rows={closure_manifest['row_counts']})")
+
     evidence = {
+        "closure_dir": str(closure_dir), "closure_manifest": closure_manifest,
         "merge_executed": merged_result is not None,
         "merge_result": merged_result,
         "repo": repo, "base": base, "base_sha": base_sha, "base_verification": base_detail,

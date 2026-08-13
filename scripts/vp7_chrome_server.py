@@ -144,13 +144,22 @@ def seed(data_dir: str) -> None:
     autonomy.revoke_grant(g_rev["id"], by="owner", reason="Больше не нужен")
 
     # --- checkpoints для timeline + compare -------------------------------
+    # verify_checkpoint пересчитывает реальные артефакты (call-18 finding 1) →
+    # демо-checkpoints ссылаются на настоящие файлы (абсолютный путь + настоящий sha).
+    import tempfile
+
+    from atlas_core.reviewpkg import sha256_file
     from atlas_core.timemachine import CheckpointInputs, create_checkpoint
+    _cpart = Path(tempfile.mkdtemp(prefix="atlas-cp-demo-"))
+    _a1 = _cpart / "calc_v1.py"; _a1.write_text("def add(a, b):\n    return a + b\n")
+    _a2 = _cpart / "calc_v2.py"; _a2.write_text("def add(a, b):\n    return a + b  # fork\n")
     base = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
     create_checkpoint(CheckpointInputs(
         project_id="proj_web", vp_key="VP-7", run_id="run_ok", db_revision="0007",
         branch="atlas/vp-7-autonomy-github-time-machine", base_sha=base,
         head_sha="f6c3d0e0a9da4b063c5d3dcc63064e94c0ccc9e9", worktree_status="clean",
-        patch_hash="sha256:patch1", artifact_hashes=[{"path": "calc.py", "sha": "sha256:aa"}],
+        patch_hash="sha256:patch1",
+        artifact_hashes=[{"path": str(_a1), "sha": sha256_file(_a1)}],
         profile_alias="claude-pro-01", model="claude", effort="medium",
         session_ids=["sess-b1"], grant_hash=g_active["content_hash"],
         test_refs=[{"name": "unit", "hash": "sha256:t1"}], evidence_refs=["ev:accept-33"],
@@ -159,7 +168,8 @@ def seed(data_dir: str) -> None:
         project_id="proj_web", vp_key="VP-7", run_id="run_ok", db_revision="0007",
         branch="atlas/vp-7-autonomy-github-time-machine", base_sha=base,
         head_sha="0011223344556677889900aabbccddeeff001122", worktree_status="clean",
-        patch_hash="sha256:patch2", artifact_hashes=[{"path": "calc.py", "sha": "sha256:bb"}],
+        patch_hash="sha256:patch2",
+        artifact_hashes=[{"path": str(_a2), "sha": sha256_file(_a2)}],
         profile_alias="codex-plus-01", model="codex", effort="high",
         session_ids=["sess-c1"], grant_hash="sha256:othergrant",
         test_refs=[{"name": "unit", "hash": "sha256:t2"}], evidence_refs=["ev:replay"],

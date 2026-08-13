@@ -54,3 +54,36 @@ class TestMigrationGuard(unittest.TestCase):
         os.environ["ATLAS_ALLOW_LIVE_MIGRATION"] = "1"
         # Не поднимает: возвращает путь (deploy сам отвечает за backup).
         assert_isolated(purpose="deploy")
+
+    # --- call-19 F: env-boundary guard (env.py звал бы assert_live_migration_allowed) ---
+    # Раньше env.py НЕ вызывал guard, поэтому raw `alembic upgrade` против живого
+    # каталога проходил молча. Здесь проверяем именно ту функцию, что теперь стоит в env.py.
+    def test_env_guard_refuses_live_target_without_flag(self):
+        from atlas_core.migration_guard import (
+            LiveMigrationRefused,
+            assert_live_migration_allowed,
+            is_live_target,
+        )
+        os.environ["ATLAS_DATA_DIR"] = "/var/lib/codevinci-atlas"
+        os.environ.pop("ATLAS_ALLOW_LIVE_MIGRATION", None)
+        self.assertTrue(is_live_target())
+        with self.assertRaises(LiveMigrationRefused):
+            assert_live_migration_allowed(purpose="alembic env")
+
+    def test_env_guard_allows_live_with_deploy_flag(self):
+        from atlas_core.migration_guard import assert_live_migration_allowed
+        os.environ["ATLAS_DATA_DIR"] = "/var/lib/codevinci-atlas"
+        os.environ["ATLAS_ALLOW_LIVE_MIGRATION"] = "1"
+        assert_live_migration_allowed(purpose="deploy")  # не поднимает
+
+    def test_env_guard_allows_isolated_target(self):
+        import tempfile
+
+        from atlas_core.migration_guard import assert_live_migration_allowed, is_live_target
+        d = tempfile.mkdtemp(prefix="atlas-guard-env-")
+        os.environ["ATLAS_DATA_DIR"] = d
+        os.environ.pop("ATLAS_ALLOW_LIVE_MIGRATION", None)
+        self.assertFalse(is_live_target())
+        assert_live_migration_allowed(purpose="alembic env")  # изолированный → не поднимает
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)

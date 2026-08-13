@@ -191,14 +191,38 @@ def find_by_hash(content_hash_value: str) -> dict | None:
 # для точного head реальные файлы (path+sha256); резолвер перечитывает их с диска.
 
 
+class EvidenceConflictError(Exception):
+    """Попытка перерегистрировать существующий ``(head_sha, ref)`` с ДРУГИМ
+    path/sha/kind/size — нарушение immutable evidence-модели (§18.1). Исходная
+    запись не меняется; байты подменить нельзя."""
+
+    code = "EVIDENCE_IMMUTABLE_CONFLICT"
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
 def register_merge_evidence(head_sha: str, entries: list[dict], *, actor: str = "core",
                             correlation_id: str = "") -> list[dict]:
-    """Зарегистрировать durable evidence для точного ``head_sha``.
+    """Зарегистрировать **immutable** durable evidence для точного ``head_sha``.
 
     ``entries``: ``[{ref, path, kind?}]``. sha256 вычисляется из **реального файла**
     (fail-closed: отсутствующий файл → ``FileNotFoundError``, регистрация не
-    фабрикует хеш). Идемпотентно по ``(head_sha, ref)`` — повторная регистрация
-    обновляет path/sha/размер. Возвращает список ``to_dict()`` строк."""
+    фабрикует хеш).
+
+    Immutable-модель по ключу ``(head_sha, ref)`` (call-18 §2):
+
+    * первая регистрация создаёт неизменяемую запись;
+    * повтор с ТЕМ ЖЕ нормализованным path, текущим sha256, kind и size —
+      идемпотентный no-op (запись не мутируется);
+    * повтор с ДРУГИМ path/hash/kind/size — fail-closed
+      :class:`EvidenceConflictError` (код ``EVIDENCE_IMMUTABLE_CONFLICT``); исходная
+      запись остаётся прежней. Это значит: подмена файла + повторная регистрация НЕ
+      «благословляет» новые байты, и произвольный caller не может переустановить
+      baseline, на который уже ссылается существующий ReviewPackage.
+
+    Возвращает список ``to_dict()`` строк (существующих при no-op)."""
     if not head_sha:
         raise ValueError("head_sha обязателен для регистрации evidence")
     out: list[dict] = []
@@ -209,6 +233,7 @@ def register_merge_evidence(head_sha: str, entries: list[dict], *, actor: str = 
         p = Path(path)
         if not p.exists() or not p.is_file():
             raise FileNotFoundError(f"evidence-файл отсутствует/не файл: {path}")
+        resolved = str(p.resolve())
         sha = sha256_file(p)
         size = p.stat().st_size
         with session_scope() as s:
@@ -217,17 +242,20 @@ def register_merge_evidence(head_sha: str, entries: list[dict], *, actor: str = 
                 MergeEvidence.ref == ref)).scalars().first()
             if row is None:
                 row = MergeEvidence(
-                    id=new_id("mev"), head_sha=head_sha, ref=ref, path=str(p.resolve()),
+                    id=new_id("mev"), head_sha=head_sha, ref=ref, path=resolved,
                     sha256=sha, kind=kind, size_bytes=size, actor=actor,
                     correlation_id=correlation_id, created_at=_now())
                 s.add(row)
+                s.commit()
+                out.append(row.to_dict())
+            elif (row.path == resolved and row.sha256 == sha
+                  and row.kind == kind and row.size_bytes == size):
+                out.append(row.to_dict())  # идемпотентный no-op — запись не тронута
             else:
-                row.path = str(p.resolve())
-                row.sha256 = sha
-                row.kind = kind
-                row.size_bytes = size
-            s.commit()
-            out.append(row.to_dict())
+                # immutable-конфликт: НЕ мутируем строку, отклоняем перерегистрацию.
+                raise EvidenceConflictError(
+                    f"evidence {ref}@{head_sha[:12]} уже зарегистрировано с иным "
+                    "path/sha/kind/size — immutable evidence не переопределяется")
     audit.record("review.evidence.registered",
                  f"head={head_sha[:12]} refs={len(entries)}", actor=actor,
                  correlation_id=correlation_id)

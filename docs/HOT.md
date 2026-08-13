@@ -108,6 +108,21 @@
   (Две попытки вызова были технически прерваны средой до вердикта — §6 повтор на
   неизменном head; вердикт дала третья.) merge не исполнялся. call-7…17 immutable;
   NEXT — **call 18**.
+- **call 18** (head `cff0eed`, codex-plus-01, независим) → genuine **REVISE** (2 HIGH):
+  (1) `verify_checkpoint` не пересчитывал реальные артефакты — изменённый/удалённый
+  артефакт оставался «verified»; **Fix:** пересчёт sha каждого файлового артефакта
+  (`ARTIFACT_MISSING`/`ARTIFACT_ALTERED`). (2) `create_checkpoint` без redaction мог
+  записать секрет в durable checkpoint; **Fix:** fail-closed `SECRET_IN_CHECKPOINT` по
+  каждому полю. Вместе — tracked §2/§3: immutable evidence-store
+  (`EVIDENCE_IMMUTABLE_CONFLICT`), обязательная evidence-политика, сохраняемая
+  closure-БД + `resume_authorization` (merge без повторного Reviewer). merge не
+  исполнялся. call-7…18 immutable; NEXT — **call 19**.
+- **Инцидент миграции (устранён).** При §4-валидации `alembic upgrade head` против
+  живого каталога **случайно мигрировал живую БД `0006→0007`** — потому что `env.py` НЕ
+  вызывал `migration_guard`. Немедленно возвращено `downgrade → 0006` (0007-таблицы были
+  пусты, VP-0..6 данные целы). **Fix:** `env.py` теперь вызывает
+  `assert_live_migration_allowed()`; живая миграция — ТОЛЬКО при
+  `ATLAS_ALLOW_LIVE_MIGRATION=1` (guarded deploy §8). **Живая БД снова `0006`.**
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

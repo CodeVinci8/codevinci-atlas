@@ -73,6 +73,24 @@ def contains_secret(text: str) -> bool:
     return False
 
 
+def contains_raw_auth_path(text: str) -> bool:
+    """True, если строка содержит raw path к auth/credential/profile-файлу (§11.2)."""
+
+    return any(p.search(text) for p in _PATH_RULES)
+
+
+def is_sensitive(text: str) -> bool:
+    """True, если ``text`` содержит секрет, канареечный маркер **или** raw auth/
+    credential/profile path (§30). Объединяет :func:`contains_secret` и
+    :func:`contains_raw_auth_path`; используется fail-closed валидаторами durable-
+    состояния (например Time Machine checkpoint), которые обязаны отвергать любое
+    поле с потенциальным секретом ДО записи."""
+
+    if not text:
+        return False
+    return contains_secret(text) or contains_raw_auth_path(text)
+
+
 @dataclass
 class SecretHit:
     path: str
