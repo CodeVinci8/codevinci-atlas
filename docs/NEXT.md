@@ -65,14 +65,16 @@ call **15** (head `d788bd1`, codex-plus-02) — genuine **REVISE** (evidence-sto
 call **17** (head `be94175`, codex-plus-02) — genuine **REVISE** (межпроцессный
 Emergency TOCTOU: durable-барьер до снимка active-runs); call **18** (head `cff0eed`,
 codex-plus-01) — genuine **REVISE** (2 HIGH: `verify_checkpoint` не пересчитывал реальные
-артефакты; `create_checkpoint` без redaction). Находки call 15…18 исправлены с тестами.
-Вместе с call-18 внесены tracked-правки §2/§3 (immutable evidence-store; обязательная
-evidence-политика; сохраняемая closure-БД + resume без Reviewer) и **устранён дефект
-безопасности миграций**: `env.py` теперь вызывает `migration_guard` (случайная миграция
+артефакты; `create_checkpoint` без redaction); call **19** (head `57b1abb`, codex-plus-02)
+— genuine **REVISE** (1 HIGH обход verified-hashes через malformed ref без хеша + 2 MEDIUM:
+cause>80 → TAMPERED; actor/correlation_id/created_at не в content_hash). Находки call 15…19
+исправлены с тестами. Вместе с call-18 внесены tracked-правки §2/§3 (immutable evidence-store;
+обязательная evidence-политика; сохраняемая closure-БД + resume без Reviewer) и **устранён
+дефект безопасности миграций**: `env.py` теперь вызывает `migration_guard` (случайная миграция
 живой БД `0006→0007` при валидации немедленно возвращена downgrade → `0006`; VP-0..6 целы).
 call 14 НЕ переименовывается в REVISE.
 
-**Следующий шаг:** независимый Reviewer **call 19** по исправленному зелёному head
+**Следующий шаг:** независимый Reviewer **call 20** по исправленному зелёному head
 (после commit/push и зелёного CI на точном PR head). При genuine PASS — авторитетный
 evidence-backed STANDARD-merge PR #13 (`authorize_merge_execution`=MERGE_PERMITTED,
 `VP7_EXECUTE_MERGE=1`, `--match-head-commit`), backup, миграция `0006→0007` (guarded,

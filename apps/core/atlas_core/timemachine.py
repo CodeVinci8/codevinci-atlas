@@ -27,7 +27,7 @@ from . import audit, autonomy, emergency, redaction
 from .autonomy import Capability
 from .db import session_scope
 from .ids import new_id
-from .orm import Checkpoint, Run
+from .orm import Checkpoint, Run, _iso
 from .productmap import content_hash
 from .redaction import redact
 
@@ -63,7 +63,23 @@ class CheckpointInputs:
     cause: str = ""
 
 
-def _payload_from_inputs(i: CheckpointInputs) -> dict:
+def _canon_cause(cause: str) -> str:
+    """Канонический ``cause`` = ровно то, что хранится в БД (``String(80)``).
+
+    call-19 finding 2: раньше content_hash считался по ПОЛНОМУ ``cause``, а строка
+    хранила ``cause[:80]`` — любой ``cause`` длиннее 80 давал мгновенный ``TAMPERED``.
+    Единая канонизация до хеша и записи устраняет расхождение."""
+    return (cause or "")[:80]
+
+
+def _payload_from_inputs(i: CheckpointInputs, *, actor: str, correlation_id: str,
+                         created_at: datetime) -> dict:
+    """Canonical immutable-payload для content_hash. ДОЛЖЕН совпадать
+    поле-в-поле с :meth:`orm.Checkpoint.immutable_payload` (сверяется при verify).
+
+    call-19 finding 2/3: ``cause`` канонизируется как хранится (``[:80]``); ``actor``/
+    ``correlation_id``/``created_at`` включены в хеш (§21 immutability — их подмена в
+    durable-состоянии теперь даёт ``TAMPERED``)."""
     return {
         "project_id": i.project_id, "vp_key": i.vp_key,
         "work_order_id": i.work_order_id, "run_id": i.run_id,
@@ -73,8 +89,38 @@ def _payload_from_inputs(i: CheckpointInputs) -> dict:
         "profile_alias": i.profile_alias, "model": i.model, "effort": i.effort,
         "session_ids": i.session_ids, "grant_id": i.grant_id, "grant_hash": i.grant_hash,
         "test_refs": i.test_refs, "evidence_refs": i.evidence_refs,
-        "handoff_ref": i.handoff_ref, "cause": i.cause,
+        "handoff_ref": i.handoff_ref, "cause": _canon_cause(i.cause),
+        "actor": actor, "correlation_id": correlation_id, "created_at": _iso(created_at),
     }
+
+
+def _validate_ref_schema(i: CheckpointInputs) -> None:
+    """Fail-closed схема файловых ссылок (call-19 finding 1). Любая запись, объявляющая
+    файловый ``path`` без ожидаемого хеша — ``CHECKPOINT_MALFORMED_REF``: иначе
+    ``verify_checkpoint`` молча пропустил бы её (обход verified-hashes)."""
+    for j, a in enumerate(i.artifact_hashes or []):
+        if not isinstance(a, dict) or not a.get("path") or not a.get("sha"):
+            raise TimeMachineError("CHECKPOINT_MALFORMED_REF",
+                                   f"artifact_hashes[{j}] требует непустые path и sha")
+    for j, t in enumerate(i.test_refs or []):
+        if not isinstance(t, dict):
+            raise TimeMachineError("CHECKPOINT_MALFORMED_REF", f"test_refs[{j}] должен быть объектом")
+        if t.get("path") and not (t.get("hash") or t.get("sha")):
+            raise TimeMachineError("CHECKPOINT_MALFORMED_REF",
+                                   f"test_refs[{j}] с path требует hash/sha")
+        if not t.get("name") and not t.get("path"):
+            raise TimeMachineError("CHECKPOINT_MALFORMED_REF", f"test_refs[{j}] требует name или path")
+    for j, e in enumerate(i.evidence_refs or []):
+        if isinstance(e, dict):
+            if e.get("path") and not (e.get("sha") or e.get("hash")):
+                raise TimeMachineError("CHECKPOINT_MALFORMED_REF",
+                                       f"evidence_refs[{j}] с path требует sha/hash")
+            if not e.get("ref") and not e.get("path"):
+                raise TimeMachineError("CHECKPOINT_MALFORMED_REF",
+                                       f"evidence_refs[{j}] требует ref или path")
+        elif not isinstance(e, str):
+            raise TimeMachineError("CHECKPOINT_MALFORMED_REF",
+                                   f"evidence_refs[{j}] должен быть строкой или объектом")
 
 
 def _reject_secrets(i: CheckpointInputs, *, actor: str, correlation_id: str) -> None:
@@ -118,7 +164,12 @@ def create_checkpoint(i: CheckpointInputs, *, actor: str = "core",
     """Создать immutable content-addressed checkpoint."""
     import json as _json
     _reject_secrets(i, actor=actor, correlation_id=correlation_id)
-    ch = content_hash(_payload_from_inputs(i))
+    _validate_ref_schema(i)  # malformed файловая ссылка → отказ (call-19 finding 1)
+    created = _utcnow()
+    # content_hash покрывает и actor/correlation_id/created_at, и канонический cause —
+    # payload ДОЛЖЕН совпасть с Checkpoint.immutable_payload() (иначе verify → TAMPERED).
+    ch = content_hash(_payload_from_inputs(i, actor=actor, correlation_id=correlation_id,
+                                           created_at=created))
     cid = new_id("ckpt")
     with session_scope() as s:
         row = Checkpoint(
@@ -132,8 +183,8 @@ def create_checkpoint(i: CheckpointInputs, *, actor: str = "core",
             grant_id=i.grant_id, grant_hash=i.grant_hash,
             test_refs_json=_json.dumps(i.test_refs, ensure_ascii=False),
             evidence_refs_json=_json.dumps(i.evidence_refs, ensure_ascii=False),
-            handoff_ref=i.handoff_ref, cause=i.cause[:80], actor=actor,
-            correlation_id=correlation_id, content_hash=ch, created_at=_utcnow())
+            handoff_ref=i.handoff_ref, cause=_canon_cause(i.cause), actor=actor,
+            correlation_id=correlation_id, content_hash=ch, created_at=created)
         s.add(row)
         s.commit()
         out = row.to_dict()
@@ -177,16 +228,19 @@ def _referenced_artifacts(cp: dict) -> list[tuple[str, str, str]]:
     (``test_refs`` без path, строковые ``evidence_refs``) файлового артефакта не
     имеют и покрываются только ``content_hash`` (их значение нельзя изменить, не
     сломав content_hash)."""
+    # call-19 finding 1: включаем КАЖДУЮ запись с файловым path, даже без ожидаемого
+    # хеша (expected=""), чтобы verify не «молча пропустил» malformed-ссылку, а
+    # инвалидировал checkpoint. Пустой expected → MALFORMED_ARTIFACT_REF в verify.
     out: list[tuple[str, str, str]] = []
     for a in cp.get("artifact_hashes", []) or []:
-        if isinstance(a, dict) and a.get("path") and a.get("sha"):
-            out.append(("artifact", str(a["path"]), str(a["sha"])))
+        if isinstance(a, dict) and a.get("path"):
+            out.append(("artifact", str(a["path"]), str(a.get("sha") or "")))
     for t in cp.get("test_refs", []) or []:
-        if isinstance(t, dict) and t.get("path") and (t.get("hash") or t.get("sha")):
-            out.append(("test", str(t["path"]), str(t.get("hash") or t.get("sha"))))
+        if isinstance(t, dict) and t.get("path"):
+            out.append(("test", str(t["path"]), str(t.get("hash") or t.get("sha") or "")))
     for e in cp.get("evidence_refs", []) or []:
-        if isinstance(e, dict) and e.get("path") and (e.get("sha") or e.get("hash")):
-            out.append(("evidence", str(e["path"]), str(e.get("sha") or e.get("hash"))))
+        if isinstance(e, dict) and e.get("path"):
+            out.append(("evidence", str(e["path"]), str(e.get("sha") or e.get("hash") or "")))
     return out
 
 
@@ -197,6 +251,8 @@ def _verify_referenced_artifacts(cp: dict, root: str | None) -> tuple[bool, str]
     а не сверкой строки БД самой с собой: удаление/подмена реального артефакта теперь
     инвалидирует checkpoint (INVALID_EVIDENCE)."""
     for _label, raw, expected in _referenced_artifacts(cp):
+        if not expected:
+            return False, "MALFORMED_ARTIFACT_REF"  # path без хеша — не verified (finding 1)
         p = _resolve_artifact_path(raw, root)
         if not p.exists() or not p.is_file():
             return False, "ARTIFACT_MISSING"

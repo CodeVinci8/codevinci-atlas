@@ -471,6 +471,42 @@ alembic — живой production data_dir/DB мигрируется ТОЛЬК�
 секрет-скан durable/artifacts ЧИСТО; `git diff --check` чист; live БД остаётся `0006`.
 call-7…18 immutable. NEXT: **call 19** по исправленному зелёному head.
 
+### call 19 — genuine REVISE (head `57b1abb`, codex-plus-02)
+
+Независимый Reviewer (codex-plus-02, read-only, session present, 18 файлов) на полном
+diff `57b1abb` вернул genuine **REVISE** (3 находки: 1 HIGH, 2 MEDIUM). Артефакты в
+`var/artifacts/vp7/final_review/call-19/` (immutable). Запуск с `VP7_EXECUTE_MERGE=1` —
+harness fail-closed на REVISE: **merge НЕ исполнялся**. Свежая ёмкость (probe app-server):
+codex-plus-01 57% used, codex-plus-02 5% used → выбран безопасный независимый codex-plus-02.
+
+**Находка 1 (HIGH) — обход verified-hashes через malformed ref.** `_referenced_artifacts()`
+молча пропускал запись с `path`, но без `sha`/`hash`, а `create_checkpoint` не валидировал
+схему `artifact_hashes`/`test_refs`/`evidence_refs` — checkpoint с
+`artifact_hashes=[{"path":"…"}]` создавался и `verify_checkpoint` признавал его валидным,
+не проверяя файл (сохранялся обход call-18 finding 1). **Fix:** `_validate_ref_schema`
+fail-closed отвергает malformed файловую ссылку при создании (`CHECKPOINT_MALFORMED_REF`);
+`verify_checkpoint` (defense-in-depth для legacy) инвалидирует любую path-ссылку без хеша
+(`MALFORMED_ARTIFACT_REF`). Тесты `test_create_rejects_path_ref_without_hash`,
+`test_verify_rejects_malformed_legacy_ref`.
+
+**Находка 2 (MEDIUM) — рассинхрон cause.** content_hash считался по ПОЛНОМУ
+`CheckpointInputs.cause`, но строка хранила `cause[:80]` — любой `cause` длиннее 80 давал
+мгновенный `TAMPERED`. **Fix:** единая канонизация `_canon_cause` (`[:80]`) до хеша и записи.
+Тест `test_long_cause_still_verifies`.
+
+**Находка 3 (MEDIUM) — незащищённые actor/correlation_id/created_at.** Возвращались в
+checkpoint, но отсутствовали в `immutable_payload()`/content_hash — их подмена в durable-
+состоянии не обнаруживалась (§21 immutability). **Fix:** `immutable_payload` (и creation-
+payload) покрывают `actor`/`correlation_id`/`created_at` (`_iso`, окружение UTC — round-trip
+без потерь); подмена любого → `TAMPERED`. Так как content_hash теперь включает per-creation
+`created_at`, «детерминизм» acceptance #22 переопределён как **воспроизводимость** content_hash
+из собственного содержимого checkpoint (не «создать дважды»). Тест
+`test_actor_and_correlation_and_created_at_tamper_detected`.
+
+Все находки исправлены с тестами; **merge не исполнялся, PASS не фабриковался**. Валидация:
+регрессия **463 OK**; acceptance **34/34**; секрет-скан ЧИСТО; `git diff --check` чист; live
+БД остаётся `0006`. call-7…19 immutable. NEXT: **call 20** по исправленному зелёному head.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

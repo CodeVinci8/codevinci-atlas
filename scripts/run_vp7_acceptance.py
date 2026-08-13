@@ -493,8 +493,14 @@ class VP7:
                               test_refs=[{"name": "unit", "hash": "sha256:t"}],
                               evidence_refs=["ev1"], cause="post-review")
         cp = create_checkpoint(ci)
-        # детерминизм: тот же payload → тот же content_hash
-        cp2_hash_same = create_checkpoint(ci)["content_hash"] == cp["content_hash"]
+        # детерминизм = ВОСПРОИЗВОДИМОСТЬ content_hash из собственного immutable-содержимого
+        # checkpoint (call-19 finding 3: created_at/actor/correlation_id теперь тоже покрыты
+        # хешем — каждый checkpoint отдельная immutable-запись, поэтому проверяем не
+        # «создать дважды», а пересчёт над сохранённым payload).
+        from atlas_core.productmap import content_hash as _chash
+        with session_scope() as s:
+            _row = s.get(Checkpoint, cp["id"])
+            det_reproducible = _chash(_row.immutable_payload()) == cp["content_hash"]
         verified = verify_checkpoint(cp["id"])[0]
         with session_scope() as s:
             s.get(Checkpoint, cp["id"]).head_sha = "TAMPERED"
@@ -503,11 +509,11 @@ class VP7:
         blob = json.dumps(cp).lower()
         no_secrets = not any(m in blob for m in ("@", "token", "cookie", "password",
                                                  "transcript", "/home/", "/root/"))
-        self.art("c22_23_checkpoint.json", {"det_hash": cp2_hash_same, "verified": verified,
+        self.art("c22_23_checkpoint.json", {"det_hash": det_reproducible, "verified": verified,
                  "tamper_invalid": (not tampered[0]) and tampered[1] == "TAMPERED",
                  "no_secrets": no_secrets})
-        self.rec(22, "Хеши checkpoint детерминированы; tamper инвалидирует",
-                 cp2_hash_same and verified and not tampered[0], f"det={cp2_hash_same}")
+        self.rec(22, "content_hash checkpoint воспроизводим из содержимого; tamper инвалидирует",
+                 det_reproducible and verified and not tampered[0], f"det={det_reproducible}")
         self.rec(23, "В checkpoint нет credentials/email/raw path/transcript", no_secrets,
                  f"no_secrets={no_secrets}")
         self._ck = cp

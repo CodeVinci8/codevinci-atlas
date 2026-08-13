@@ -1641,6 +1641,65 @@ class TestTimeMachine(VP7Base):
                 self.assertNotIn("ghp_", blob)
                 self.assertNotIn("auth.json", blob)
 
+    # --- call-19 finding 1: malformed файловая ссылка (path без hash) ----------
+    def test_create_rejects_path_ref_without_hash(self):
+        from atlas_core.timemachine import TimeMachineError
+        for over in (
+            dict(artifact_hashes=[{"path": "/x/art"}]),                 # без sha
+            dict(artifact_hashes=[], test_refs=[{"name": "u", "path": "/x/t"}]),  # path без hash
+            dict(artifact_hashes=[], evidence_refs=[{"ref": "e", "path": "/x/e"}]),  # path без sha
+        ):
+            with self.assertRaises(TimeMachineError) as ctx:
+                self._ckpt(**over)
+            self.assertEqual(ctx.exception.code, "CHECKPOINT_MALFORMED_REF")
+
+    def test_verify_rejects_malformed_legacy_ref(self):
+        """Даже если malformed-ссылка попала в БД в обход create (legacy), verify
+        инвалидирует checkpoint (MALFORMED_ARTIFACT_REF), не «молча пропуская» её."""
+        import json as _json
+
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint, _utcnow
+        from atlas_core.productmap import content_hash
+        from atlas_core.timemachine import verify_checkpoint
+        row = Checkpoint(id="ckpt_legacy", project_id="p", head_sha="H", cause="x",
+                         actor="core", correlation_id="", created_at=_utcnow(),
+                         artifact_hashes_json=_json.dumps([{"path": "/x/art"}]))  # path без sha
+        with session_scope() as s:
+            s.add(row); s.commit()   # применить column-defaults
+        # честный content-hash по УЖЕ персистированному состоянию (defaults применены)
+        with session_scope() as s:
+            r = s.get(Checkpoint, "ckpt_legacy")
+            r.content_hash = content_hash(r.immutable_payload())
+            s.commit()
+        self.assertEqual(verify_checkpoint("ckpt_legacy"), (False, "MALFORMED_ARTIFACT_REF"))
+
+    # --- call-19 finding 2: cause >80 не должен ломать verify ------------------
+    def test_long_cause_still_verifies(self):
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint
+        from atlas_core.timemachine import verify_checkpoint
+        long_cause = "c" * 120
+        cp = self._ckpt(cause=long_cause)
+        self.assertTrue(verify_checkpoint(cp["id"])[0])   # НЕ TAMPERED
+        with session_scope() as s:
+            self.assertEqual(s.get(Checkpoint, cp["id"]).cause, long_cause[:80])
+
+    # --- call-19 finding 3: actor/correlation_id/created_at покрыты хешем ------
+    def test_actor_and_correlation_and_created_at_tamper_detected(self):
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Checkpoint, _utcnow
+        from atlas_core.timemachine import verify_checkpoint
+        for field, val in (("actor", "attacker"), ("correlation_id", "forged"),
+                           ("created_at", _utcnow().replace(year=2000))):
+            cp = self._ckpt()
+            self.assertTrue(verify_checkpoint(cp["id"])[0])
+            with session_scope() as s:
+                setattr(s.get(Checkpoint, cp["id"]), field, val)
+                s.commit()
+            self.assertEqual(verify_checkpoint(cp["id"]), (False, "TAMPERED"),
+                             f"подмена {field} должна давать TAMPERED")
+
     def _repo_with_base_head(self):
         d = tempfile.mkdtemp(prefix="atlas-tm-")
         repo = str(Path(d) / "repo")

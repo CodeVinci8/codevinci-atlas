@@ -117,6 +117,13 @@
   (`EVIDENCE_IMMUTABLE_CONFLICT`), обязательная evidence-политика, сохраняемая
   closure-БД + `resume_authorization` (merge без повторного Reviewer). merge не
   исполнялся. call-7…18 immutable; NEXT — **call 19**.
+- **call 19** (head `57b1abb`, codex-plus-02, независим, `VP7_EXECUTE_MERGE=1` → fail-closed
+  на REVISE) → genuine **REVISE** (1 HIGH + 2 MEDIUM): (1) malformed файловая ссылка (path
+  без hash) обходила verified-hashes — `_validate_ref_schema` отвергает при создании
+  (`CHECKPOINT_MALFORMED_REF`), verify инвалидирует legacy (`MALFORMED_ARTIFACT_REF`);
+  (2) `cause`>80 → TAMPERED, единая канонизация `[:80]`; (3) actor/correlation_id/created_at
+  не покрывались content_hash — теперь в `immutable_payload` (подмена → TAMPERED; #22
+  переопределён как воспроизводимость). merge не исполнялся. call-7…19 immutable; NEXT — **call 20**.
 - **Инцидент миграции (устранён).** При §4-валидации `alembic upgrade head` против
   живого каталога **случайно мигрировал живую БД `0006→0007`** — потому что `env.py` НЕ
   вызывал `migration_guard`. Немедленно возвращено `downgrade → 0006` (0007-таблицы были

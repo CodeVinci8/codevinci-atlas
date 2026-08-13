@@ -1447,7 +1447,11 @@ class Checkpoint(Base):
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
 
     def immutable_payload(self) -> dict:
-        """Canonical immutable-содержимое, покрываемое ``content_hash``."""
+        """Canonical immutable-содержимое, покрываемое ``content_hash``. Должно
+        совпадать поле-в-поле с ``timemachine._payload_from_inputs`` (иначе verify
+        даёт ложный TAMPERED). call-19 finding 3: ``actor``/``correlation_id``/
+        ``created_at`` тоже покрыты хешем — их подмена в durable-состоянии
+        обнаруживается verify_checkpoint (§21 immutability + actor/correlation/UTC)."""
         import json as _json
         return {
             "project_id": self.project_id, "vp_key": self.vp_key,
@@ -1463,6 +1467,8 @@ class Checkpoint(Base):
             "test_refs": _json.loads(self.test_refs_json or "[]"),
             "evidence_refs": _json.loads(self.evidence_refs_json or "[]"),
             "handoff_ref": self.handoff_ref, "cause": self.cause,
+            "actor": self.actor, "correlation_id": self.correlation_id,
+            "created_at": _iso(self.created_at),
         }
 
     def to_dict(self) -> dict:
