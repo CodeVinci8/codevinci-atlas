@@ -94,6 +94,12 @@
   independent of artifact_hashes); (2) replay Emergency-окно между первичной проверкой
   и созданием Run → повторный `blocks_new_jobs()` барьер + откат orphan-ветки. Обе
   исправлены с тестами; merge не исполнялся. call-7…15 immutable; NEXT — **call 16**.
+- **call 16** (head `541c534`, codex-plus-02, независим) → genuine **REVISE** (2):
+  (1, критично) replay TOCTOU — повторная проверка `blocks_new_jobs()` перед
+  `_create_replay_run()` не атомарна с INSERT Run → добавлена проверка ПОСЛЕ INSERT +
+  rollback (Run→CANCELLED, откат ветки); (2) `NEXT.md` рассинхронизирован (call 9/9) →
+  приведён к факту. Исправлены с тестами; merge не исполнялся. call-7…16 immutable;
+  NEXT — **call 17**.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

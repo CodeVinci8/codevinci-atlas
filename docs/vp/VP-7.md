@@ -361,6 +361,29 @@ diff `d788bd1` вернул genuine **REVISE** (2 находки HIGH), merge Н
 tsc + build; Chrome 50/50; секрет-скан ЧИСТО; live БД остаётся `0006`. call-7…15
 immutable. NEXT: **call 16** по исправленному зелёному head.
 
+### call 16 — genuine REVISE (head `541c534`, codex-plus-02)
+
+Независимый Reviewer (codex-plus-02, read-only, session present, 17 файлов) на полном
+diff `541c534` вернул genuine **REVISE** (2 находки), merge НЕ исполнялся:
+
+1. **(критично)** replay всё ещё имел TOCTOU с Emergency Stop: повторная проверка
+   `blocks_new_jobs()` перед `_create_replay_run()` НЕ атомарна с durable-INSERT Run —
+   если `engage()` снял снимок active-runs ДО появления нового Run, тот остался бы
+   QUEUED при активном Stop. **Fix:** после INSERT — повторная проверка
+   `blocks_new_jobs()` и rollback (Run→CANCELLED через `_cancel_replay_run`, ветка
+   откатывается `_rollback_replay_branch`); при ошибке INSERT ветка тоже откатывается.
+   `_ENGAGING` (ставится engage() ДО снимка) + durable active держат
+   `blocks_new_jobs()` непрерывно, поэтому Stop, перекрывший INSERT, замечается с двух
+   сторон. Тест `test_replay_emergency_race_after_run_creation_rolls_back`.
+2. Рассинхрон durable-truth: `docs/NEXT.md` объявлял `NEXT_ACTION` как call 9/9, тогда
+   как фактически пройдены call 9…16. **Fix:** `NEXT.md` приведён к фактическому
+   состоянию (история call 7…16, next call по исправленному head).
+
+Обе находки исправлены; **merge не исполнялся, PASS не фабриковался**. Валидация:
+регрессия **446 OK**; acceptance 34/34; Web i18n 736/736 + tsc + build; Chrome 50/50;
+секрет-скан ЧИСТО; live БД остаётся `0006`. call-7…16 immutable. NEXT: **call 17** по
+исправленному зелёному head.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

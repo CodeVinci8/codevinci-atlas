@@ -54,13 +54,21 @@ single-Claude пул (registry-driven, claude-pro-02 disabled), production Run-s
 
 ## NEXT_ACTION
 
-Новый owner-авторизованный независимый Reviewer **call 9/9** по исправленному head
-(после того как все правки закоммичены, запушены и CI зелёный на точном PR head).
-call 7/7 (REVISE@`4517ebd` → fix `6aa2d20`) и call 8/8 (REVISE@`fad8449` →
-emergency/starts_at fix) израсходованы; оба genuine REVISE, находки исправлены с
-тестами. При genuine PASS — авторитетный STANDARD-merge PR #13, backup, миграция
-`0006→0007`, рестарт стека, live-smoke, truth-sync. При REVISE — не мержить,
-зафиксировать блокеры. Каждый новый Reviewer-вызов требует явной owner-авторизации.
+Владелец снял лимит на число Reviewer-вызовов: последовательные независимые Codex
+Reviewer до genuine current-head PASS. **Immutable история:** call 7…13 — genuine
+**REVISE** (heads `4517ebd`…`14a2da9`, все находки исправлены с тестами); call **14**
+(head `9684e8b`, codex-plus-01) — genuine **PASS** (0 находок), НО authoritative merge
+gate вернул `MISSING_EVIDENCE` → merge не исполнен (реальный evidence-gate дефект);
+call **15** (head `d788bd1`, codex-plus-02) — genuine **REVISE** (evidence-store
+самодостаточность + replay Emergency-окно); call **16** (head `541c534`, codex-plus-02)
+— genuine **REVISE** (replay check-then-insert TOCTOU + рассинхрон durable-truth).
+Находки call 15/16 исправлены с тестами. call 14 НЕ переименовывается в REVISE.
+
+**Следующий шаг:** независимый Reviewer **call 17** по исправленному зелёному head
+(после commit/push и зелёного CI на точном PR head). При genuine PASS — авторитетный
+evidence-backed STANDARD-merge PR #13 (`authorize_merge_execution`=MERGE_PERMITTED,
+`VP7_EXECUTE_MERGE=1`, `--match-head-commit`), backup, миграция `0006→0007`, рестарт
+стека, live Chrome-smoke, truth-sync. При REVISE — не мержить, исправить, повторить.
 
 ## VP-8 (записано, НЕ реализовано)
 

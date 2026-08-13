@@ -329,20 +329,39 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
 
     # call-15 fix (finding 2): Emergency Stop мог начаться ПОСЛЕ первичной проверки
     # (выше) и до создания Run — иначе replay материализовал бы ветку и создал новый
-    # QUEUED Run уже при активном Stop (нарушение «запрещены новые jobs»). Повторный
-    # барьер НЕПОСРЕДСТВЕННО перед созданием Run; уже материализованную replay-ветку
-    # (branch без Run — не job) откатываем, чтобы не оставлять мусор. source-ветка не
-    # трогается. Аналог второго Emergency-барьера у merge-boundary (github_adapter).
+    # QUEUED Run уже при активном Stop (нарушение «запрещены новые jobs»). Барьер
+    # НЕПОСРЕДСТВЕННО перед созданием Run; уже материализованную replay-ветку (branch
+    # без Run — не job) откатываем. source-ветка не трогается.
     if emergency.blocks_new_jobs():
-        if repo_path and new_branch:
-            _git(repo_path, "branch", "-D", new_branch)  # удалить orphan replay-ветку
+        _rollback_replay_branch(repo_path, new_branch)
         raise TimeMachineError(
             "EMERGENCY_STOP",
             "Emergency Stop активен перед созданием Run: replay прерван (новый job запрещён)")
 
     # Новый Run (QUEUED); provider session/transcript НЕ восстанавливаются.
-    new_run = _create_replay_run(cp, new_branch, profile_alias or cp["profile_alias"],
-                                 grant_id, cause, actor, correlation_id)
+    # call-16 fix (finding 1): создание Run и проверка Stop НЕ атомарны. engage(), чей
+    # снимок active-runs (_interrupt_active_runs) прошёл ДО durable-INSERT этого Run,
+    # оставил бы Run QUEUED при активном Stop (job избежал бы прерывания). Поэтому:
+    # (а) при ошибке INSERT откатываем ветку; (б) ПОСЛЕ INSERT повторно проверяем
+    # blocks_new_jobs() и при видимом Stop отменяем только что созданный Run
+    # (QUEUED→CANCELLED, данные целы) и откатываем ветку. _ENGAGING (ставится engage()
+    # ДО снимка) и durable active держат blocks_new_jobs() НЕПРЕРЫВНО от начала engage,
+    # поэтому любой Stop, перекрывший INSERT, здесь замечается — окно закрыто с двух
+    # сторон (снимок engage ловит Run, вставленные до него; re-check ловит вставленные
+    # во время/после снимка).
+    try:
+        new_run = _create_replay_run(cp, new_branch, profile_alias or cp["profile_alias"],
+                                     grant_id, cause, actor, correlation_id)
+    except Exception:
+        _rollback_replay_branch(repo_path, new_branch)
+        raise
+    if emergency.blocks_new_jobs():
+        _cancel_replay_run(new_run)
+        _rollback_replay_branch(repo_path, new_branch)
+        raise TimeMachineError(
+            "EMERGENCY_STOP",
+            "Emergency Stop активен сразу после создания Run: replay откатан "
+            "(Run CANCELLED, ветка удалена)")
     audit.record("checkpoint.replayed",
                  f"ckpt={checkpoint_id} run={new_run} branch={new_branch} grant={grant_id}",
                  actor=actor, correlation_id=correlation_id)
@@ -516,6 +535,24 @@ def recover(checkpoint_id: str, *, grant_id: str = "", repo_path: str | None = N
         "recovery": result,
         "note": "Критерии и evidence сохранены; recovery идёт в новую ветку/Run.",
     }
+
+
+def _rollback_replay_branch(repo_path: str | None, branch: str | None) -> None:
+    """Откат orphan replay-ветки (branch без Run — не job). source не трогается."""
+    if repo_path and branch:
+        _git(repo_path, "branch", "-D", branch)
+
+
+def _cancel_replay_run(run_id: str) -> None:
+    """Отменить только что созданный QUEUED replay-Run (→CANCELLED, данные целы)."""
+    with session_scope() as s:
+        r = s.get(Run, run_id)
+        if r is not None and r.state not in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            r.state = "CANCELLED"
+            r.blocker = "Emergency Stop"
+            r.updated_at = _utcnow()
+            r.version = (r.version or 1) + 1
+            s.commit()
 
 
 def _create_replay_run(cp: dict, branch: str, profile_alias: str, grant_id: str,

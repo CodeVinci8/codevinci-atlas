@@ -1759,6 +1759,44 @@ class TestTimeMachine(VP7Base):
                              capture_output=True, text=True).stdout.strip()
         self.assertEqual(src, head)
 
+    # --- call-16 fix (finding 1): Stop, чей снимок прошёл ДО INSERT нового Run, ---
+    # --- ловится ПОСЛЕ создания Run: Run CANCELLED, ветка откатана (не QUEUED). ---
+    def test_replay_emergency_race_after_run_creation_rolls_back(self):
+        from atlas_core import emergency, timemachine
+        from atlas_core.autonomy import create_grant
+        from atlas_core.db import session_scope
+        from atlas_core.orm import Run
+        from atlas_core.timemachine import TimeMachineError, replay
+        from sqlalchemy import select
+        repo, base, head = self._repo_with_base_head()
+        cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
+        calls = {"n": 0}
+        real = emergency.blocks_new_jobs
+
+        def flaky():   # False на initial+pre-insert барьерах, True на post-insert re-check
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        timemachine.emergency.blocks_new_jobs = flaky
+        try:
+            with self.assertRaises(TimeMachineError) as cm:
+                replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        finally:
+            timemachine.emergency.blocks_new_jobs = real
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        # ветка откатена; source цел; НИ ОДНОГО QUEUED replay-Run под активным Stop.
+        left = subprocess.run(["git", "-C", repo, "branch", "--list", "atlas/replay-*"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "", "replay-ветка должна быть удалена")
+        with session_scope() as s:
+            states = [r.state for r in s.execute(
+                select(Run).where(Run.dedup_key.like("replay:%"))).scalars().all()]
+        self.assertTrue(all(st != "QUEUED" for st in states),
+                        f"replay-Run не должен остаться QUEUED при Stop: {states}")
+
     # --- Bypass B: scope выводится из checkpoint/project, каллер не расширяет ---
     def test_replay_grant_for_other_project_denied(self):
         from atlas_core.autonomy import create_grant
