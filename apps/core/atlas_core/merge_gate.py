@@ -223,6 +223,15 @@ def _authoritative_rp_facts(review_package_id: str,
         return None, G_INVALID_REVIEW, "ReviewPackage не найден в хранилище"
     if not rp.get("evidence_refs"):
         return rp, G_INVALID_REVIEW, "ReviewPackage не evidence-backed (пустой evidence_refs)"
+    # Store-самодостаточная fail-closed сверка КАЖДОЙ объявленной ссылки с durable
+    # store + реальным файлом (call-15 finding 1): подмена зарегистрированного
+    # evidence деним (ARTIFACT_ALTERED), даже если файл не входит в artifact_hashes;
+    # незарегистрированная/отсутствующая ссылка → MISSING_EVIDENCE. Не зависит от
+    # того, продублировано ли evidence в ReviewPackage.artifact_hashes.
+    ev_ok, ev_code, ev_detail = reviewpkg.verify_evidence_for_refs(
+        rp.get("head_sha") or "", rp["evidence_refs"])
+    if not ev_ok:
+        return rp, G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {ev_code}: {ev_detail}"
     facts = reviewpkg.resolve_review_facts(rp, expected_head=expected_head)
     valid, code, _reason = reviewpkg.validate_review_package(review_package_id, facts)
     rp = reviewpkg.get_review_package(review_package_id)  # перечитать после инвалидции

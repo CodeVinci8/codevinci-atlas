@@ -1251,6 +1251,17 @@ class TestEvidenceGate(VP7Base):
         self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
         self.assertIn("ARTIFACT_ALTERED", d.conditions[0]["detail"])
 
+    def test_tampered_ref_without_artifact_hash_denies(self):
+        # call-15 finding 1: evidence_ref зарегистрирован, но НЕ включён в artifact_hashes;
+        # подмена файла деним ARTIFACT_ALTERED (store самодостаточен, независим от arts).
+        paths, refs, _arts = self._register_evidence("HEAD1")
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=[])  # без artifact_hashes
+        Path(paths[0]).write_text("TAMPERED-REF-ONLY", encoding="utf-8")
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("ARTIFACT_ALTERED", d.conditions[0]["detail"])
+
     def test_evidence_from_another_head_denies(self):
         _p, refs, arts = self._register_evidence("OTHERHEAD")   # зарегистрировано под чужим head
         pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
@@ -1714,6 +1725,39 @@ class TestTimeMachine(VP7Base):
         with self.assertRaises(TimeMachineError) as cm:
             replay(cp["id"], grant_id=g["id"])
         self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+
+    # --- call-15 fix (finding 2): Stop, начавшийся ПОСЛЕ первичной проверки, но ДО ---
+    # --- создания Run, прерывает replay; orphan replay-ветка откатывается, Run нет. ---
+    def test_replay_emergency_race_before_run_denies(self):
+        from atlas_core import emergency, timemachine
+        from atlas_core.autonomy import create_grant
+        from atlas_core.timemachine import TimeMachineError, replay
+        repo, base, head = self._repo_with_base_head()
+        cp = self._ckpt(branch="atlas/vp-7-src", base_sha=base, head_sha=head)
+        g = create_grant(project_id="p", mode="AUTONOMOUS", capabilities=["repo_write"],
+                         allowed_repos=["a/b"], allowed_bases=["main"],
+                         workspace_allowlist=[repo], reason="r")
+        calls = {"n": 0}
+        real = emergency.blocks_new_jobs
+
+        def flaky():   # False на первичной проверке, True на повторном барьере перед Run
+            calls["n"] += 1
+            return calls["n"] > 1
+
+        timemachine.emergency.blocks_new_jobs = flaky
+        try:
+            with self.assertRaises(TimeMachineError) as cm:
+                replay(cp["id"], grant_id=g["id"], repo_path=repo)
+        finally:
+            timemachine.emergency.blocks_new_jobs = real
+        self.assertEqual(cm.exception.code, "EMERGENCY_STOP")
+        # orphan replay-ветка откатена; source-ветка не тронута; новый Run не создан.
+        left = subprocess.run(["git", "-C", repo, "branch", "--list", "atlas/replay-*"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "", "replay-ветка должна быть удалена")
+        src = subprocess.run(["git", "-C", repo, "rev-parse", "atlas/vp-7-src"],
+                             capture_output=True, text=True).stdout.strip()
+        self.assertEqual(src, head)
 
     # --- Bypass B: scope выводится из checkpoint/project, каллер не расширяет ---
     def test_replay_grant_for_other_project_denied(self):

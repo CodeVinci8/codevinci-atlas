@@ -334,6 +334,33 @@ Chrome 50/50 (34 скриншота), миграции empty→0007 и seeded 00
 --check чист. NEXT: **call 15** (codex-plus-02, независим) по новому зелёному head;
 при genuine PASS — merge/backup/миграция/deploy/truth-sync.
 
+### call 15 — genuine REVISE (head `d788bd1`, codex-plus-02)
+
+Независимый Reviewer (codex-plus-02, read-only, session present, 21 файл) на полном
+diff `d788bd1` вернул genuine **REVISE** (2 находки HIGH), merge НЕ исполнялся:
+
+1. **evidence-store не самодостаточен** (`reviewpkg.py`): `resolve_review_facts`
+   пересчитывал файл, но игнорировал сохранённый `MergeEvidence.sha256`, а
+   `validate_review_package` сверял только с `ReviewPackage.artifact_hashes` — если
+   `evidence_ref` зарегистрирован, но НЕ включён в `artifact_hashes`, подмена его файла
+   осталась бы валидной. **Fix:** `resolve_review_facts` помечает ссылку `present`
+   только при совпадении с зарегистрированным `sha256`; новая
+   `verify_evidence_for_refs(head, refs)` — fail-closed сверка КАЖДОЙ объявленной
+   ссылки с store+реальным файлом (отсутствует→`MISSING_EVIDENCE`, изменён→
+   `ARTIFACT_ALTERED`), вызывается в `_authoritative_rp_facts` независимо от
+   `artifact_hashes`. Тест `test_tampered_ref_without_artifact_hash_denies`.
+2. **replay Emergency-окно** (`timemachine.py`): Emergency Stop проверялся только в
+   начале; `engage()` после проверки, но до создания Run, позволил бы материализовать
+   ветку и создать новый QUEUED Run при активном Stop. **Fix:** повторный
+   `blocks_new_jobs()` барьер НЕПОСРЕДСТВЕННО перед созданием Run; orphan replay-ветка
+   откатывается (branch без Run — не job), source не трогается. Тест
+   `test_replay_emergency_race_before_run_denies` (гонка через counter-patch).
+
+Обе находки исправлены с регрессионными тестами; **merge не исполнялся, PASS не
+фабриковался**. Валидация: регрессия **445 OK**; acceptance 34/34; Web i18n 736/736 +
+tsc + build; Chrome 50/50; секрет-скан ЧИСТО; live БД остаётся `0006`. call-7…15
+immutable. NEXT: **call 16** по исправленному зелёному head.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

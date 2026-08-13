@@ -87,6 +87,13 @@
   acceptance, зарегистрированные evidence-файлы) и использует production CI-политику.
   Это **tracked-правка** → call 14 больше не авторизует исправленный head; следующий
   подлинный вызов — **call 15** по новому зелёному head.
+- **call 15** (head `d788bd1`, codex-plus-02, независим) → genuine **REVISE** (2 HIGH):
+  (1) evidence-store не самодостаточен — `resolve_review_facts` игнорировал
+  `MergeEvidence.sha256`, ref-only файл вне `artifact_hashes` можно подменить →
+  добавлена `verify_evidence_for_refs` (fail-closed сверка КАЖДОЙ ссылки со store,
+  independent of artifact_hashes); (2) replay Emergency-окно между первичной проверкой
+  и созданием Run → повторный `blocks_new_jobs()` барьер + откат orphan-ветки. Обе
+  исправлены с тестами; merge не исполнялся. call-7…15 immutable; NEXT — **call 16**.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

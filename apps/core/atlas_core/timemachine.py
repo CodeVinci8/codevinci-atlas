@@ -327,6 +327,19 @@ def replay(checkpoint_id: str, *, grant_id: str, profile_alias: str | None = Non
         if source_head_before is not None and source_head_after != source_head_before:
             raise TimeMachineError("SOURCE_REWRITTEN", "source-ветка была изменена — откат")
 
+    # call-15 fix (finding 2): Emergency Stop мог начаться ПОСЛЕ первичной проверки
+    # (выше) и до создания Run — иначе replay материализовал бы ветку и создал новый
+    # QUEUED Run уже при активном Stop (нарушение «запрещены новые jobs»). Повторный
+    # барьер НЕПОСРЕДСТВЕННО перед созданием Run; уже материализованную replay-ветку
+    # (branch без Run — не job) откатываем, чтобы не оставлять мусор. source-ветка не
+    # трогается. Аналог второго Emergency-барьера у merge-boundary (github_adapter).
+    if emergency.blocks_new_jobs():
+        if repo_path and new_branch:
+            _git(repo_path, "branch", "-D", new_branch)  # удалить orphan replay-ветку
+        raise TimeMachineError(
+            "EMERGENCY_STOP",
+            "Emergency Stop активен перед созданием Run: replay прерван (новый job запрещён)")
+
     # Новый Run (QUEUED); provider session/transcript НЕ восстанавливаются.
     new_run = _create_replay_run(cp, new_branch, profile_alias or cp["profile_alias"],
                                  grant_id, cause, actor, correlation_id)

@@ -266,9 +266,38 @@ def resolve_review_facts(rp: dict, *, expected_head: str | None = None) -> Revie
     for r in list_merge_evidence(head):
         p = Path(r["path"])
         if not p.exists() or not p.is_file():
-            continue  # неразрешимо → ссылка останется missing (fail-closed)
-        artifacts[r["path"]] = sha256_file(p)   # пересчёт реального файла (tamper-детекция)
-        present.append(r["ref"])
+            continue  # файл отсутствует → ссылка останется missing (fail-closed)
+        actual = sha256_file(p)                  # пересчёт реального файла
+        artifacts[r["path"]] = actual            # для перекрёстной сверки с artifact_hashes
+        # present ТОЛЬКО при совпадении с ЗАРЕГИСТРИРОВАННЫМ в store sha256: tampered
+        # ref-only файл (не входящий в artifact_hashes) НЕ считается present (fail-closed,
+        # call-15 finding 1 — store самодостаточно защищает от подмены).
+        if actual == r["sha256"]:
+            present.append(r["ref"])
     facts.evidence_present = present
     facts.artifacts = artifacts
     return facts
+
+
+def verify_evidence_for_refs(head_sha: str, refs: list[str]) -> tuple[bool, str, str]:
+    """Fail-closed сверка КАЖДОЙ объявленной evidence-ссылки с durable store и
+    РЕАЛЬНЫМ файлом — **независимо** от ``artifact_hashes`` (call-15 finding 1).
+
+    Возвращает ``(ok, code, detail)``: ссылка не зарегистрирована под этим head или
+    файл отсутствует → ``MISSING_EVIDENCE``; текущий sha файла ≠ сохранённого
+    ``MergeEvidence.sha256`` → ``ARTIFACT_ALTERED``. Это делает store
+    самодостаточным: подмена зарегистрированного файла деним даже если он не
+    перечислен в ``ReviewPackage.artifact_hashes``."""
+    if not head_sha:
+        return False, "MISSING_EVIDENCE", "нет head_sha для сверки evidence"
+    rows = {r["ref"]: r for r in list_merge_evidence(head_sha)}
+    for ref in refs:
+        row = rows.get(ref)
+        if row is None:
+            return False, "MISSING_EVIDENCE", f"evidence не зарегистрировано под head: {ref}"
+        p = Path(row["path"])
+        if not p.exists() or not p.is_file():
+            return False, "MISSING_EVIDENCE", f"evidence-файл отсутствует: {ref}"
+        if sha256_file(p) != row["sha256"]:
+            return False, "ARTIFACT_ALTERED", f"evidence изменён относительно store: {ref}"
+    return True, "", ""
