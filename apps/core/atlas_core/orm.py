@@ -1181,6 +1181,37 @@ class EvidenceCacheEntry(Base):
         }
 
 
+class MergeEvidence(Base):
+    """Durable, head-bound evidence-store для authoritative merge gate (§18.1, §20.2).
+
+    Разрешает логические evidence-ссылки ReviewPackage в **реальные immutable
+    файлы** для точного ``head_sha``, чтобы ``authorize_merge_execution`` выводил
+    факты (present/tamper) из durable Atlas-состояния и пересчёта настоящих файлов,
+    а не из caller-supplied claims. Секреты не хранятся — только путь и sha256."""
+
+    __tablename__ = "merge_evidence"
+    __table_args__ = (UniqueConstraint("head_sha", "ref", name="uq_merge_evidence_head_ref"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    head_sha: Mapped[str] = mapped_column(String(64), default="", index=True)
+    ref: Mapped[str] = mapped_column(String(120), default="")   # напр. ev:vp7-accept-34
+    path: Mapped[str] = mapped_column(String(500), default="")  # реальный файл (не секрет)
+    sha256: Mapped[str] = mapped_column(String(80), default="")  # зарегистрированный "sha256:.."
+    kind: Mapped[str] = mapped_column(String(20), default="artifact")  # artifact|reference
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    actor: Mapped[str] = mapped_column(String(80), default="core")
+    correlation_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "head_sha": self.head_sha, "ref": self.ref,
+            "path": self.path, "sha256": self.sha256, "kind": self.kind,
+            "size_bytes": self.size_bytes, "actor": self.actor,
+            "correlation_id": self.correlation_id, "created_at": _iso(self.created_at),
+        }
+
+
 class ManualAudit(Base):
     """Manual audit (§18.4): read-only, не мутирует код."""
 

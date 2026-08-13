@@ -146,6 +146,27 @@ def upgrade() -> None:
                     ["idempotency_key"], unique=True)
     op.create_index("ix_github_deliveries_created_at", "github_deliveries", ["created_at"])
 
+    # --- merge_evidence (durable head-bound evidence-store для merge gate) ---
+    # Разрешает логические evidence-ссылки RP в реальные файлы для точного head,
+    # чтобы authorize_merge_execution выводил факты из durable-состояния (не caller).
+    op.create_table(
+        "merge_evidence",
+        sa.Column("id", sa.String(length=40), primary_key=True),
+        sa.Column("head_sha", sa.String(length=64), nullable=False, server_default=""),
+        sa.Column("ref", sa.String(length=120), nullable=False, server_default=""),
+        sa.Column("path", sa.String(length=500), nullable=False, server_default=""),
+        sa.Column("sha256", sa.String(length=80), nullable=False, server_default=""),
+        sa.Column("kind", sa.String(length=20), nullable=False, server_default="artifact"),
+        sa.Column("size_bytes", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column("actor", sa.String(length=80), nullable=False, server_default="core"),
+        sa.Column("correlation_id", sa.String(length=64), nullable=False, server_default=""),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+    )
+    op.create_index("ix_merge_evidence_head_sha", "merge_evidence", ["head_sha"])
+    op.create_index("ix_merge_evidence_created_at", "merge_evidence", ["created_at"])
+    op.create_index("uq_merge_evidence_head_ref", "merge_evidence",
+                    ["head_sha", "ref"], unique=True)
+
     # --- profile_health.source (provenance auth-health, VP-7) --------------
     op.add_column("profile_health",
                   sa.Column("source", sa.String(length=40), nullable=False, server_default=""))
@@ -174,6 +195,10 @@ def downgrade() -> None:
             b.drop_column(col)
     with op.batch_alter_table("profile_health") as b:
         b.drop_column("source")
+    for idx in ("uq_merge_evidence_head_ref", "ix_merge_evidence_created_at",
+                "ix_merge_evidence_head_sha"):
+        op.drop_index(idx, table_name="merge_evidence")
+    op.drop_table("merge_evidence")
     for idx in ("ix_github_deliveries_created_at", "ux_github_deliveries_idempotency_key",
                 "ix_github_deliveries_repo", "ix_github_deliveries_project_id"):
         op.drop_index(idx, table_name="github_deliveries")

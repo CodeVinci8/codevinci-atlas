@@ -70,8 +70,23 @@
   (head `14a2da9`, codex-plus-02) → genuine **REVISE** (3 находки: commit/push не
   энфорсили workspace-scope checkout; squash-merge без `--match-head-commit` — TOCTOU
   current-head; Emergency-окно между первым барьером и squash из-за durable
-  record_delivery) → исправлено с тестами. call-7…13 immutable, не переименовываются
-  в PASS; следующий подлинный вызов — **call 14** по исправленному зелёному head.
+  record_delivery) → исправлено с тестами. call **14** (head `9684e8b`, codex-plus-01,
+  независим, session present) → genuine **PASS** (reviewer PASS, quality PASS, 0 находок,
+  CI GREEN 4 required job, mergeability CLEAN), НО authoritative STANDARD merge gate
+  вернул `REVIEW_PACKAGE_INVALID / MISSING_EVIDENCE` → merge НЕ исполнен. call-7…14
+  immutable; call 14 НЕ переименовывается в REVISE — это подлинный PASS на старом head,
+  чей execution-gate деним по MISSING_EVIDENCE.
+- **Evidence-gate defect (call-14 → исправлено, §2):** `authorize_merge_execution`
+  вызывал `validate_review_package` с ПУСТЫМИ фактами, из-за чего evidence-backed RP
+  всегда падал в MISSING_EVIDENCE, а `artifact_hashes` не сверялись (tamper незаметен).
+  Fix: durable head-bound **evidence-store** (`merge_evidence`, миграция 0007) +
+  `reviewpkg.resolve_review_facts` (факты из store + пересчёта реальных файлов, не из
+  caller-claims); authoritative-путь требует evidence-backed RP (пустой → deny),
+  missing→MISSING_EVIDENCE, tampered→ARTIFACT_ALTERED, чужой head→deny. Harness
+  `run_vp7_final_review.py` строит RP из РЕАЛЬНЫХ входов (точный base SHA, свежий
+  acceptance, зарегистрированные evidence-файлы) и использует production CI-политику.
+  Это **tracked-правка** → call 14 больше не авторизует исправленный head; следующий
+  подлинный вызов — **call 15** по новому зелёному head.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

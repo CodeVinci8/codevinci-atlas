@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -18,13 +19,17 @@ from sqlalchemy import select
 from . import audit
 from .db import session_scope
 from .ids import new_id
-from .orm import ReviewPackage
+from .orm import MergeEvidence, ReviewPackage
 from .productmap import canonical_json, content_hash
 from .redaction import redact
 
 
 def sha256_file(path: str | Path) -> str:
     return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -173,3 +178,97 @@ def find_by_hash(content_hash_value: str) -> dict | None:
         row = s.execute(select(ReviewPackage).where(
             ReviewPackage.content_hash == content_hash_value)).scalars().first()
         return row.to_dict() if row else None
+
+
+# --- Durable, head-bound evidence store (§18.1, §20.2 authoritative gate) ----
+#
+# Проблема, которую закрывает store: ``authorize_merge_execution`` (execution
+# boundary) обязан выводить факты (present/tamper) из **доверенного durable
+# Atlas-состояния и пересчёта реальных файлов**, а не из caller-supplied
+# ``evidence_present``/``artifacts``. Раньше он вызывал ``validate_review_package``
+# с пустыми фактами, из-за чего evidence-backed RP ВСЕГДА падал в MISSING_EVIDENCE,
+# а ``artifact_hashes`` вообще не сверялись (tamper незаметен). Store регистрирует
+# для точного head реальные файлы (path+sha256); резолвер перечитывает их с диска.
+
+
+def register_merge_evidence(head_sha: str, entries: list[dict], *, actor: str = "core",
+                            correlation_id: str = "") -> list[dict]:
+    """Зарегистрировать durable evidence для точного ``head_sha``.
+
+    ``entries``: ``[{ref, path, kind?}]``. sha256 вычисляется из **реального файла**
+    (fail-closed: отсутствующий файл → ``FileNotFoundError``, регистрация не
+    фабрикует хеш). Идемпотентно по ``(head_sha, ref)`` — повторная регистрация
+    обновляет path/sha/размер. Возвращает список ``to_dict()`` строк."""
+    if not head_sha:
+        raise ValueError("head_sha обязателен для регистрации evidence")
+    out: list[dict] = []
+    for e in entries:
+        ref = e["ref"]
+        path = e["path"]
+        kind = e.get("kind", "artifact")
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            raise FileNotFoundError(f"evidence-файл отсутствует/не файл: {path}")
+        sha = sha256_file(p)
+        size = p.stat().st_size
+        with session_scope() as s:
+            row = s.execute(select(MergeEvidence).where(
+                MergeEvidence.head_sha == head_sha,
+                MergeEvidence.ref == ref)).scalars().first()
+            if row is None:
+                row = MergeEvidence(
+                    id=new_id("mev"), head_sha=head_sha, ref=ref, path=str(p.resolve()),
+                    sha256=sha, kind=kind, size_bytes=size, actor=actor,
+                    correlation_id=correlation_id, created_at=_now())
+                s.add(row)
+            else:
+                row.path = str(p.resolve())
+                row.sha256 = sha
+                row.kind = kind
+                row.size_bytes = size
+            s.commit()
+            out.append(row.to_dict())
+    audit.record("review.evidence.registered",
+                 f"head={head_sha[:12]} refs={len(entries)}", actor=actor,
+                 correlation_id=correlation_id)
+    return out
+
+
+def list_merge_evidence(head_sha: str) -> list[dict]:
+    with session_scope() as s:
+        rows = s.execute(select(MergeEvidence).where(
+            MergeEvidence.head_sha == head_sha)).scalars().all()
+        return [r.to_dict() for r in rows]
+
+
+def resolve_review_facts(rp: dict, *, expected_head: str | None = None) -> ReviewFacts:
+    """Построить :class:`ReviewFacts` из ДОВЕРЕННОГО durable evidence-store, не из
+    caller-claims (§20.2, §2.C).
+
+    Для каждого зарегистрированного под ``rp["head_sha"]`` evidence файл
+    **перечитывается с диска** и хешируется заново:
+
+    * файл существует → ссылка ``present``; ``artifacts[path] = актуальный sha``
+      (перезаписанный/tampered файл даст sha≠зарегистрированного → в связке с
+      ``rp.artifact_hashes`` это ``ARTIFACT_ALTERED``);
+    * файл отсутствует/незарегистрирован под этим head → ссылка НЕ present →
+      ``MISSING_EVIDENCE``;
+    * evidence, зарегистрированное под другим head, невидимо (привязка к head).
+
+    ``current_head`` берётся из ``expected_head`` (доверенный факт вызывающего
+    boundary — фактический head PR), а НЕ из RP."""
+    facts = ReviewFacts(current_head=expected_head)
+    head = (rp or {}).get("head_sha") or None
+    if not head:
+        return facts
+    present: list[str] = []
+    artifacts: dict[str, str] = {}
+    for r in list_merge_evidence(head):
+        p = Path(r["path"])
+        if not p.exists() or not p.is_file():
+            continue  # неразрешимо → ссылка останется missing (fail-closed)
+        artifacts[r["path"]] = sha256_file(p)   # пересчёт реального файла (tamper-детекция)
+        present.append(r["ref"])
+    facts.evidence_present = present
+    facts.artifacts = artifacts
+    return facts

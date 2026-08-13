@@ -288,9 +288,51 @@ caller-supplied worktree; (2, критично) `GhForge.squash_merge` не пе
 в evaluate (fail-closed `WORKSPACE_NOT_ALLOWED`); squash-merge с
 `--match-head-commit <expected_head>` (атомарная current-head гарантия); повторный
 барьер Emergency НЕПОСРЕДСТВЕННО перед squash. Регрессия **435 OK**; acceptance
-34/34; Web i18n 736/736 + tsc + build; Chrome 50/50 (39 PNG); секрет-скан ЧИСТО;
-живая БД остаётся `0006`. call-7…13 immutable. NEXT: **call 14** по исправленному
-зелёному head; при genuine PASS — merge/backup/миграция/deploy/truth-sync.
+34/34; Web i18n 736/736 + tsc + build; Chrome 50/50; секрет-скан ЧИСТО;
+живая БД остаётся `0006`. call-7…13 immutable.
+
+### call 14 — genuine PASS (head `9684e8b`, codex-plus-01), НО execution-gate деним
+
+Независимый Reviewer (codex-plus-01, read-only, session present, 19 файлов) на полном
+diff `9684e8b` вернул genuine **PASS** — reviewer PASS, quality PASS, **0 находок**,
+CI GREEN (4 обязательные job), mergeability CLEAN. Однако authoritative STANDARD merge
+gate (`authorize_merge_execution`) вернул `REVIEW_PACKAGE_INVALID / MISSING_EVIDENCE` →
+**merge НЕ исполнен** (`merge_executed=false`), PASS не фабриковался. Evidence —
+`var/artifacts/vp7/final_review/call-14/` (immutable). call 14 — подлинный PASS на
+старом head; **НЕ переименовывается в REVISE**.
+
+### Evidence-gate defect (реальный, §2) — исправлено → call 15
+
+`authorize_merge_execution`/`evaluate_merge_authoritative` вызывали
+`validate_review_package` с **пустыми фактами** (`evidence_present=[]`, `artifacts={}`):
+любой evidence-backed RP всегда падал в `MISSING_EVIDENCE`, а `artifact_hashes` вообще
+не сверялись на execution-boundary (tamper незаметен). Пройти можно было лишь
+evidence-**пустым** RP — что скрыло бы evidence-backed финальный review. **Fix
+(fail-closed):**
+
+* durable head-bound **evidence-store** — таблица `merge_evidence` (миграция 0007),
+  `reviewpkg.register_merge_evidence` (sha256 из реальных файлов), `resolve_review_facts`
+  (факты из store + **пересчёта реальных файлов**, НЕ из caller-claims);
+* authoritative-путь: RP обязан быть evidence-backed (пустой → deny);
+  неразрешимое/отсутствующее → `MISSING_EVIDENCE`; изменённый файл → `ARTIFACT_ALTERED`;
+  evidence с другого head невидимо; один список без durable-регистрации не авторизует;
+* тот же evidence-backed RP/QR используется реальным `merge_pull_request`;
+* harness `run_vp7_final_review.py` строит RP из **реальных** входов: точный 40-симв.
+  base SHA (сверка live main == PR base == reviewed base), свежий детерминированный
+  acceptance (реальные command/exit/count/timestamp), зарегистрированные реальные
+  evidence-файлы; permissive `gh_checks_state` заменён на production required-context
+  политику (`GhForge.checks`).
+
+Регрессионные тесты: `TestEvidenceGate` (present→proceed, missing→MISSING_EVIDENCE,
+tampered→ARTIFACT_ALTERED, чужой head→deny, список-без-store→deny, evidence-empty→deny,
+stale head→deny) + `test_merge_requires_resolvable_evidence` (production merge-путь).
+
+Это **tracked-правка** → call 14 больше НЕ авторизует исправленный head. Валидация:
+регрессия **443 OK** (435 + 8), acceptance 34/34, Web i18n 736/736 + tsc + build,
+Chrome 50/50 (34 скриншота), миграции empty→0007 и seeded 0006→0007→downgrade→up
+(данные VP-2..6 сохранены, live БД остаётся `0006`), секрет-скан ЧИСТО, git diff
+--check чист. NEXT: **call 15** (codex-plus-02, независим) по новому зелёному head;
+при genuine PASS — merge/backup/миграция/deploy/truth-sync.
 
 ## Границы (не VP-8/VP-9)
 

@@ -27,6 +27,23 @@ class VP7Base(AtlasTestCase):
         init_engine(self.settings.db_url, self.settings.db_path)
         Base.metadata.create_all(get_engine())
 
+    def _register_evidence(self, head_sha, *, refs=("ev:accept", "ev:chrome")):
+        """Записать РЕАЛЬНЫЕ evidence-файлы в изолированный data_dir и durable-
+        зарегистрировать их под ``head_sha``. Возвращает ``(paths, evidence_refs,
+        artifact_hashes)`` для сборки evidence-backed ReviewPackage."""
+        from atlas_core.reviewpkg import register_merge_evidence
+        evdir = self.data_dir / "evidence"
+        evdir.mkdir(exist_ok=True)
+        entries, paths = [], []
+        for ref in refs:
+            p = evdir / (ref.replace(":", "_") + f"_{head_sha}.txt")
+            p.write_text(f"evidence {ref} для head {head_sha}\n", encoding="utf-8")
+            entries.append({"ref": ref, "path": str(p), "kind": "artifact"})
+            paths.append(str(p.resolve()))
+        rows = register_merge_evidence(head_sha, entries)
+        arts = [{"path": r["path"], "sha": r["sha256"]} for r in rows]
+        return paths, list(refs), arts
+
 
 # ---------------------------------------------------------------------------
 class TestAutonomyGrants(VP7Base):
@@ -314,9 +331,11 @@ class TestGithubAdapter(VP7Base):
     def _persist_rp_qr(self, head, verdict, project_id="p"):
         from atlas_core.quality import QualityService
         from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        _paths, refs, arts = self._register_evidence(head)
         pkg = build_review_package(ReviewInputs(
             project_id=project_id, run_id="r", wo_key="VP-7", vp_key="VP-7",
             branch="atlas/vp-7-x", base_sha="B", head_sha=head, impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts,
             claims=[{"claim": "c", "verified": True}]), actor="reviewer")
         rep = QualityService().build_report(pkg, verdict, "", [], run_id="r")
         return pkg["id"], rep["id"]
@@ -369,6 +388,31 @@ class TestGithubAdapter(VP7Base):
         # PR смёржен → повторный merge того же PR больше не проходит.
         with self.assertRaises(GitContractError):
             _merge(pass_rp, pass_qr)
+
+    def test_merge_requires_resolvable_evidence(self):
+        """§2/§7: production merge_pull_request использует ту же evidence-backed RP,
+        что и gate; неразрешимое evidence → deny, main не двигается."""
+        from atlas_core.autonomy import create_grant
+        from atlas_core.github_adapter import GitContractError
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        sha, prn = self._open_pr()
+        prod = self._prod("p")
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
+        paths, refs, arts = self._register_evidence(sha)
+        pkg = build_review_package(ReviewInputs(
+            project_id="p", head_sha=sha, base_sha="B", impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts,
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, "PASS", "", [], run_id="r")
+        os.remove(paths[0])  # evidence-файл исчез → авторитетный gate деним
+        with self.assertRaises(GitContractError) as c:
+            prod.merge_pull_request(project_id="p", review_package_id=pkg["id"],
+                                    quality_report_id=rep["id"], pr_number=prn,
+                                    expected_head=sha, grant_id=g["id"], base="main")
+        self.assertEqual(c.exception.code, "REVIEW_PACKAGE_INVALID")
+        self.assertEqual(self.forge.branch_head("main"), self.seed)  # merge НЕ исполнен
 
     def test_no_public_raw_squash_merge_on_adapter(self):
         # Bypass закрыт: у адаптера нет сырого squash_merge(grant_id, expected_head).
@@ -785,9 +829,11 @@ class TestGithubAdapter(VP7Base):
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
                          allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
         # RP БЕЗ base_sha → baseline_known выводится False → deny (не безусловный True).
+        _p, refs, arts = self._register_evidence(sha)
         pkg = build_review_package(ReviewInputs(
             project_id="p", run_id="r", wo_key="VP-7", vp_key="VP-7", branch="atlas/vp-7-x",
             base_sha="", head_sha=sha, impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts,
             claims=[{"claim": "c", "verified": True}]), actor="reviewer")
         rep = QualityService().build_report(pkg, "PASS", "", [], run_id="r")
         d = authorize_merge_execution(
@@ -806,9 +852,11 @@ class TestGithubAdapter(VP7Base):
         g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
                          allowed_repos=["acme/demo"], allowed_bases=["main"], reason="m")
         # RP БЕЗ impact_class → diff_in_scope выводится False → deny.
+        _p, refs, arts = self._register_evidence(sha)
         pkg = build_review_package(ReviewInputs(
             project_id="p", run_id="r", wo_key="VP-7", vp_key="VP-7", branch="atlas/vp-7-x",
             base_sha="B", head_sha=sha, impact_class="",
+            evidence_refs=refs, artifact_hashes=arts,
             claims=[{"claim": "c", "verified": True}]), actor="reviewer")
         rep = QualityService().build_report(pkg, "PASS", "", [], run_id="r")
         d = authorize_merge_execution(
@@ -1083,9 +1131,11 @@ class TestMergeGate(VP7Base):
         """Создать РЕАЛЬНЫЕ persisted ReviewPackage + QualityReport и вернуть их id."""
         from atlas_core.quality import QualityService
         from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        _paths, refs, arts = self._register_evidence(head_sha)
         pkg = build_review_package(ReviewInputs(
             project_id="p", run_id="run_x", wo_key="VP-7", vp_key="VP-7",
             branch="atlas/vp-7", base_sha="B", head_sha=head_sha, impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts,
             claims=[{"claim": "c", "verified": True}]), actor="reviewer")
         rep = QualityService().build_report(pkg, verdict, "", [], run_id="run_x")
         return pkg, rep
@@ -1129,8 +1179,10 @@ class TestMergeGate(VP7Base):
 
     def test_authoritative_merge_no_report_denies(self):
         from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        _paths, refs, arts = self._register_evidence("HEAD1")
         pkg = build_review_package(ReviewInputs(
-            project_id="p", head_sha="HEAD1", impact_class="LOCAL"), actor="reviewer")
+            project_id="p", head_sha="HEAD1", impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts), actor="reviewer")
         d = self._auth_call(review_package_id=pkg["id"])  # QR не создавали
         self.assertEqual(d.reason_code, "REVIEWER_NOT_PASS")
 
@@ -1143,6 +1195,93 @@ class TestMergeGate(VP7Base):
         pkg, rep = self._persist_rp_qr(head_sha="HEAD1", verdict="REVISE")
         d = self._auth_call(review_package_id=pkg["id"], quality_report_id=rep["id"])
         self.assertEqual(d.reason_code, "REVIEWER_NOT_PASS")
+
+
+# ---------------------------------------------------------------------------
+class TestEvidenceGate(VP7Base):
+    """§2: authoritative merge gate выводит evidence-факты из ДОВЕРЕННОГО durable
+    store + пересчёта реальных файлов (не caller-claims). Все оси fail-closed:
+    present→proceed, missing→MISSING_EVIDENCE, tampered→ARTIFACT_ALTERED, чужой
+    head→deny, один список без store→deny, evidence-empty RP→deny."""
+
+    def _mk_rp_qr(self, *, head_sha, refs, arts, verdict="PASS", project_id="p"):
+        from atlas_core.quality import QualityService
+        from atlas_core.reviewpkg import ReviewInputs, build_review_package
+        pkg = build_review_package(ReviewInputs(
+            project_id=project_id, head_sha=head_sha, base_sha="B", impact_class="LOCAL",
+            evidence_refs=refs, artifact_hashes=arts,
+            claims=[{"claim": "c", "verified": True}]), actor="reviewer")
+        rep = QualityService().build_report(pkg, verdict, "", [], run_id="r")
+        return pkg, rep
+
+    def _auth(self, *, review_package_id, quality_report_id="", head_sha="HEAD1"):
+        from atlas_core.autonomy import create_grant
+        from atlas_core.merge_gate import evaluate_merge_authoritative
+        g = create_grant(project_id="p", mode="STANDARD", capabilities=["merge_after_pass"],
+                         environment="synthetic", allowed_repos=["a/b"], allowed_bases=["main"],
+                         reason="auth")
+        return evaluate_merge_authoritative(
+            repo="a/b", base="main", branch="atlas/vp-7", head_sha=head_sha, project_id="p",
+            grant_id=g["id"], review_package_id=review_package_id,
+            quality_report_id=quality_report_id, environment="synthetic",
+            checks={"head_sha": head_sha, "state": "GREEN"},
+            mergeability={"mergeable": True, "state": "CLEAN"}, pr_number=1)
+
+    def test_evidence_backed_present_proceeds(self):
+        _p, refs, arts = self._register_evidence("HEAD1")
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertTrue(d.permitted, d.to_dict())
+
+    def test_missing_evidence_denies(self):
+        paths, refs, arts = self._register_evidence("HEAD1")
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
+        os.remove(paths[0])  # реальный файл исчез → ссылка неразрешима
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("MISSING_EVIDENCE", d.conditions[0]["detail"])
+
+    def test_tampered_artifact_denies(self):
+        paths, refs, arts = self._register_evidence("HEAD1")
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
+        Path(paths[0]).write_text("TAMPERED", encoding="utf-8")  # sha≠зарегистрированного
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("ARTIFACT_ALTERED", d.conditions[0]["detail"])
+
+    def test_evidence_from_another_head_denies(self):
+        _p, refs, arts = self._register_evidence("OTHERHEAD")   # зарегистрировано под чужим head
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("MISSING_EVIDENCE", d.conditions[0]["detail"])
+
+    def test_caller_list_without_store_denies(self):
+        # RP объявляет evidence_refs (просто список), но в durable store ничего нет —
+        # одного списка недостаточно для авторитетной авторизации.
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=["ev:x", "ev:y"], arts=[])
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("MISSING_EVIDENCE", d.conditions[0]["detail"])
+
+    def test_evidence_empty_rp_denies(self):
+        # Пустой evidence нельзя выдать за пройденный evidence-backed финальный review.
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=[], arts=[])
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"])
+        self.assertFalse(d.permitted)
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
+        self.assertIn("evidence-backed", d.conditions[0]["detail"])
+
+    def test_stale_head_with_valid_evidence_denies(self):
+        _p, refs, arts = self._register_evidence("HEAD1")
+        pkg, rep = self._mk_rp_qr(head_sha="HEAD1", refs=refs, arts=arts)
+        d = self._auth(review_package_id=pkg["id"], quality_report_id=rep["id"], head_sha="HEAD2")
+        self.assertFalse(d.permitted)   # rp.head HEAD1 != expected HEAD2 → STALE
+        self.assertEqual(d.reason_code, "REVIEW_PACKAGE_INVALID")
 
 
 # ---------------------------------------------------------------------------

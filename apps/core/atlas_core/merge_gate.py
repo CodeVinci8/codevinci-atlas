@@ -199,6 +199,38 @@ def _derive_gate_facts(rp: dict, qr: dict) -> tuple[bool, bool, bool]:
     return baseline_known, diff_in_scope, owner_gate_pending
 
 
+def _authoritative_rp_facts(review_package_id: str,
+                            expected_head: str) -> tuple[dict | None, str, str]:
+    """Загрузить ReviewPackage и ре-валидировать его по **доверенным фактам**
+    (§20.2, §2.C): факты evidence/artifact выводятся из durable evidence-store и
+    **пересчёта реальных файлов** (:func:`reviewpkg.resolve_review_facts`), НЕ из
+    caller-supplied ``evidence_present``/``artifacts``. Раньше authoritative-путь
+    вызывал ``validate_review_package`` с пустыми фактами — из-за чего evidence-
+    backed RP всегда падал (ложный MISSING_EVIDENCE), а ``artifact_hashes`` не
+    сверялись (tamper незаметен). Fail-closed правила:
+
+    * RP отсутствует в хранилище → deny;
+    * RP **не** evidence-backed (пустой ``evidence_refs``) → deny — пустое evidence
+      нельзя выдать за пройденный evidence-backed финальный review (§2.7);
+    * неразрешимое/отсутствующее evidence → ``MISSING_EVIDENCE`` (deny);
+    * файл изменён относительно ``artifact_hashes`` → ``ARTIFACT_ALTERED`` (deny);
+    * evidence с другого head невидимо (store привязан к ``rp.head_sha``) → deny.
+
+    Возвращает ``(rp, deny_code, detail)``; ``deny_code == ""`` — успех."""
+    from . import reviewpkg
+    rp = reviewpkg.get_review_package(review_package_id)
+    if rp is None:
+        return None, G_INVALID_REVIEW, "ReviewPackage не найден в хранилище"
+    if not rp.get("evidence_refs"):
+        return rp, G_INVALID_REVIEW, "ReviewPackage не evidence-backed (пустой evidence_refs)"
+    facts = reviewpkg.resolve_review_facts(rp, expected_head=expected_head)
+    valid, code, _reason = reviewpkg.validate_review_package(review_package_id, facts)
+    rp = reviewpkg.get_review_package(review_package_id)  # перечитать после инвалидции
+    if not valid:
+        return rp, G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}"
+    return rp, "", ""
+
+
 def evaluate_merge_authoritative(
         *, repo: str, base: str, branch: str, head_sha: str, project_id: str, grant_id: str,
         review_package_id: str, quality_report_id: str = "", environment: str = "",
@@ -218,7 +250,6 @@ def evaluate_merge_authoritative(
     хранилище, инвалидация пакета по факту, несовпадение переданного
     ``quality_report_id`` с последним отчётом пакета — deny со стабильным кодом.
     """
-    from . import reviewpkg
     from .quality import QualityService
 
     def _deny(code: str, detail: str) -> MergeGateDecision:
@@ -231,16 +262,12 @@ def evaluate_merge_authoritative(
     # 1. RP обязателен и должен существовать в хранилище.
     if not review_package_id:
         return _deny(G_STALE_REVIEW, "review_package_id обязателен для авторитетного merge")
-    rp = reviewpkg.get_review_package(review_package_id)
-    if rp is None:
-        return _deny(G_INVALID_REVIEW, "ReviewPackage не найден в хранилище")
 
-    # 2. Ре-валидация по факту (текущий head) переводит stale/tampered в invalid.
-    facts = reviewpkg.ReviewFacts(current_head=head_sha)
-    valid, code, _reason = reviewpkg.validate_review_package(review_package_id, facts)
-    rp = reviewpkg.get_review_package(review_package_id)  # перечитать после инвалидции
-    if not valid:
-        return _deny(G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}")
+    # 2. Ре-валидация по ДОВЕРЕННЫМ фактам (durable evidence-store + пересчёт файлов):
+    #    stale/tampered/missing evidence → invalid; evidence-empty RP → deny (§2.7).
+    rp, deny_code, detail = _authoritative_rp_facts(review_package_id, head_sha)
+    if deny_code:
+        return _deny(deny_code, detail)
 
     # 3. QualityReport — последний для этого RP из хранилища (не caller-dict).
     qr = QualityService().latest_report(review_package_id)
@@ -276,7 +303,6 @@ def authorize_merge_execution(*, forge, repo: str, project_id: str, review_packa
     фактический squash исполняет только :meth:`GitHubAdapter.merge_pull_request`
     после положительного решения и повторной TOCTOU-проверки head.
     """
-    from . import reviewpkg
     from .quality import QualityService
 
     def _deny(code: str, detail: str) -> MergeGateDecision:
@@ -290,15 +316,12 @@ def authorize_merge_execution(*, forge, repo: str, project_id: str, review_packa
         return _deny(G_STALE_REVIEW,
                      "нужны точные project_id/review_package_id/quality_report_id/expected_head")
 
-    # 1. ReviewPackage из хранилища + ре-валидация по факту (head==expected_head).
-    rp = reviewpkg.get_review_package(review_package_id)
-    if rp is None:
-        return _deny(G_INVALID_REVIEW, "ReviewPackage не найден в хранилище")
-    valid, code, _reason = reviewpkg.validate_review_package(
-        review_package_id, reviewpkg.ReviewFacts(current_head=expected_head))
-    rp = reviewpkg.get_review_package(review_package_id)
-    if not valid:
-        return _deny(G_INVALID_REVIEW, f"ReviewPackage инвалиден по факту: {code}")
+    # 1. ReviewPackage из хранилища + ре-валидация по ДОВЕРЕННЫМ фактам
+    #    (durable evidence-store + пересчёт реальных файлов, НЕ caller-claims):
+    #    missing/tampered evidence → deny; evidence-empty RP → deny (§2.7).
+    rp, deny_code, detail = _authoritative_rp_facts(review_package_id, expected_head)
+    if deny_code:
+        return _deny(deny_code, detail)
     if rp.get("head_sha") != expected_head:
         return _deny(G_STALE_REVIEW, "ReviewPackage.head_sha != expected_head")
     # RP должен относиться к тому же проекту, что и операция/grant (§1 audit).

@@ -393,10 +393,24 @@ class VP7:
         forge, _ad0, sha, prn = self._gh_state
         forge.set_checks(sha, "GREEN")
 
+        from atlas_core.reviewpkg import register_merge_evidence
+
         def _rp_qr(head, verdict):
+            # evidence-backed RP: реальные файлы durable-регистрируются под head
+            # (авторитетный gate резолвит их из store + пересчёта, а не из caller-claims).
+            evd = Path(self.tmp) / "evidence"
+            evd.mkdir(exist_ok=True)
+            entries = []
+            for ref in ("ev:accept", "ev:chrome"):
+                p = evd / f"{ref.replace(':', '_')}_{head}.txt"
+                p.write_text(f"evidence {ref} для head {head}", encoding="utf-8")
+                entries.append({"ref": ref, "path": str(p), "kind": "artifact"})
+            rows = register_merge_evidence(head, entries)
+            arts = [{"path": r["path"], "sha": r["sha256"]} for r in rows]
             pkg = build_review_package(ReviewInputs(
                 project_id="proj_v7", run_id="run_auth", wo_key="VP-7", vp_key="VP-7",
                 branch="atlas/vp-7-a", base_sha="B", head_sha=head, impact_class="LOCAL",
+                evidence_refs=[e["ref"] for e in entries], artifact_hashes=arts,
                 claims=[{"claim": "c", "verified": True}]), actor="reviewer")
             rep = QualityService().build_report(pkg, verdict, "", [], run_id="run_auth")
             return pkg["id"], rep["id"]

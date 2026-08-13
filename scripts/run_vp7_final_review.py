@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -84,27 +85,81 @@ def _persist(name: str, obj) -> None:
                             encoding="utf-8")
 
 
+def _git(*args: str) -> str:
+    return sh(["git", "-C", str(_ROOT), *args]).stdout.strip()
+
+
+def resolve_and_verify_base(repo: str, base: str, pr: int) -> tuple[str, dict]:
+    """Точный 40-символьный base SHA + сверка live ``main`` == PR base == reviewed
+    base (§3). Возвращает ``(base_sha, detail)``; при расхождении detail["ok"]=False
+    (fail-closed на стороне вызывающего)."""
+    sh(["git", "-C", str(_ROOT), "fetch", "origin", base, "--quiet"])
+    reviewed = _git("rev-parse", f"origin/{base}")
+    live_main = sh(["gh", "api", f"repos/{repo}/branches/{base}",
+                    "--jq", ".commit.sha"]).stdout.strip()
+    pr_base = sh(["gh", "api", f"repos/{repo}/pulls/{pr}",
+                  "--jq", ".base.sha"]).stdout.strip()
+    ok = bool(reviewed) and reviewed == live_main == pr_base
+    return reviewed, {"ok": ok, "reviewed_base": reviewed, "live_main": live_main,
+                      "pr_base": pr_base}
+
+
 def gh_checks_state(repo: str, head: str) -> dict:
-    r = sh(["gh", "api", f"repos/{repo}/commits/{head}/check-runs",
-            "--jq", "[.check_runs[] | {status, conclusion}]"])
-    if r.returncode != 0:
-        return {"head_sha": head, "state": "UNKNOWN"}
-    runs = json.loads(r.stdout or "[]")
-    if not runs:
-        return {"head_sha": head, "state": "PENDING", "runs": 0}
-    if any(x.get("status") != "completed" for x in runs):
-        return {"head_sha": head, "state": "PENDING", "runs": len(runs)}
-    ok = all(x.get("conclusion") in ("success", "neutral", "skipped") for x in runs)
-    return {"head_sha": head, "state": "GREEN" if ok else "FAILING", "runs": len(runs)}
+    """Состояние CI по ПРОДАКШН-политике обязательных контекстов (§3): та же
+    ``GhForge.checks`` + ``_resolve_required_contexts``, что и merge gate — required
+    jobs должны присутствовать и быть success; neutral/skipped/посторонние ≠ green."""
+    from atlas_core.github_adapter import GhForge
+    return GhForge(repo).checks(head)
 
 
 def gh_mergeability(repo: str, pr: int) -> dict:
-    r = sh(["gh", "pr", "view", str(pr), "--repo", repo, "--json", "mergeable,mergeStateStatus,state"])
-    if r.returncode != 0:
-        return {"mergeable": False, "state": "UNKNOWN"}
-    d = json.loads(r.stdout)
-    return {"mergeable": d.get("mergeable") == "MERGEABLE" and d.get("state") == "OPEN",
-            "state": d.get("mergeStateStatus", "")}
+    """mergeability по продакшн-политике (mergeStateStatus==CLEAN), та же
+    ``GhForge.mergeability``, что и merge gate."""
+    from atlas_core.github_adapter import GhForge
+    return GhForge(repo).mergeability(pr)
+
+
+def run_fresh_acceptance() -> dict:
+    """Свежий детерминированный ``run_vp7_acceptance.py`` (§3): реальные command/
+    exit/count/timestamp/source вместо хардкода. Возвращает dict-evidence."""
+    ts = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    cmd = [str(_ROOT / ".venv/bin/python"), "scripts/run_vp7_acceptance.py"]
+    r = sh(cmd, cwd=str(_ROOT),
+           env={**os.environ, "PYTHONPATH": f"{_ROOT}/apps/core:{_ROOT}/apps/runner"})
+    m = re.search(r"\((\d+)/(\d+)\)", r.stdout or "")
+    passed, total = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    return {"command": " ".join(cmd), "exit_code": r.returncode, "passed": passed,
+            "total": total, "timestamp": ts, "source": "scripts/run_vp7_acceptance.py",
+            "matrix_path": str(_ROOT / "var/artifacts/vp7/acceptance_matrix.json"),
+            "log_tail": (r.stdout or "")[-300:]}
+
+
+# Кандидаты реальных evidence-файлов (регистрируются только существующие).
+_EVIDENCE_CANDIDATES: list[tuple[str, str]] = [
+    ("ev:vp7-acceptance", "var/artifacts/vp7/acceptance_matrix.json"),
+    ("ev:vp7-accept-evidence", "var/artifacts/vp7/evidence_sha256.json"),
+    ("ev:chrome-manifest", "var/artifacts/vp7/chrome/manifest_sha256.json"),
+    ("ev:vp6-e2e-manifest", "var/artifacts/vp6/real_e2e/manifest_sha256.json"),
+]
+
+
+def collect_and_register_evidence(head: str) -> tuple[list[str], list[dict], list[dict]]:
+    """Зарегистрировать реальные evidence-файлы под ``head`` в durable store
+    (изолированная 0007-БД) и вернуть ``(evidence_refs, artifact_hashes, details)``.
+    Регистрируются ТОЛЬКО существующие файлы (fail-closed: несуществующее evidence
+    не объявляется в RP, иначе gate его не разрешит)."""
+    from atlas_core.reviewpkg import register_merge_evidence, sha256_file
+    entries, details = [], []
+    for ref, rel in _EVIDENCE_CANDIDATES:
+        p = _ROOT / rel
+        if p.exists() and p.is_file():
+            entries.append({"ref": ref, "path": str(p), "kind": "artifact"})
+            details.append({"ref": ref, "path": str(p.resolve()),
+                            "sha256": sha256_file(p), "source": rel})
+    rows = register_merge_evidence(head, entries) if entries else []
+    refs = [e["ref"] for e in entries]
+    arts = [{"path": r["path"], "sha": r["sha256"]} for r in rows]
+    return refs, arts, details
 
 
 def _reviewer_prompt(repo, base, head, files, ins, dele, diff_path, old_findings, evidence_ctx):
@@ -126,27 +181,27 @@ def _reviewer_prompt(repo, base, head, files, ins, dele, diff_path, old_findings
         "{\"verdict\": \"PASS\"|\"REVISE\", \"findings\": [строки], \"checked_files\": [строки]}.")
 
 
-def _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat):
-    """Собрать SHA-bound ReviewPackage + QualityReport для точного head. Аргументы
-    валидируются здесь (до вызова provider в основном потоке это делается dry-run)."""
+def _build_quality(base_sha, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat,
+                   *, acceptance, evidence_refs, artifact_hashes):
+    """Собрать SHA-bound **evidence-backed** ReviewPackage + QualityReport для точного
+    head из РЕАЛЬНЫХ входов (§3): точный ``base_sha`` (не «origin/main»), acceptance
+    из свежих результатов, evidence_refs/artifact_hashes из durable-зарегистрированных
+    реальных файлов. Факты для валидации выводятся из доверенного store + пересчёта
+    файлов (:func:`resolve_review_facts`), как и на merge-boundary."""
     from atlas_core.firewall import FirewallContext
     from atlas_core.quality import QualityService
-    from atlas_core.reviewpkg import ReviewFacts, ReviewInputs, build_review_package
+    from atlas_core.reviewpkg import ReviewInputs, build_review_package, resolve_review_facts
     pkg = build_review_package(ReviewInputs(
         project_id="proj_vp7", run_id="run_final", wo_key="VP-7", vp_key="VP-7",
-        branch="atlas/vp-7-autonomy-github-time-machine", base_sha=f"origin/{base}", head_sha=head,
+        branch="atlas/vp-7-autonomy-github-time-machine", base_sha=base_sha, head_sha=head,
         spec_hash="sha256:vp7-spec", impact_class="SHARED",
         diff_summary={"files": len(files), "insertions": ins, "deletions": dele, "stat_tail": stat[-400:]},
-        acceptance=[
-            {"criterion": "run_vp7_acceptance 34/34", "check": "deterministic", "passed": True},
-            {"criterion": "Python регрессия 383 OK", "check": "unittest", "passed": True},
-            {"criterion": "Chrome 48/48 0 PII", "check": "playwright", "passed": True},
-            {"criterion": "миграции 0007 up/down", "check": "alembic", "passed": True},
-            {"criterion": "CI зелёный на текущем head", "check": "gh", "passed": True}],
+        acceptance=acceptance,
         claims=[{"claim": "VP-7 реализован в scope, доказательства воспроизводимы",
                  "verified": verdict_reviewer == "PASS"}],
-        checks=[{"command": "gh checks", "version": head[:8], "result": "GREEN", "cache": "live"}],
-        evidence_refs=["ev:vp7-accept-33", "ev:chrome-manifest", "ev:vp6-e2e-manifest"],
+        checks=[{"command": "gh checks (required-context policy)", "version": head[:8],
+                 "result": "GREEN", "cache": "live"}],
+        evidence_refs=evidence_refs, artifact_hashes=artifact_hashes,
         limitations=["Профили-console 4→40 — VP-8", "File Atelier — VP-9", "Cookie-import UNSUPPORTED"],
         freshness={"brief": "FRESH", "baseline": "FRESH"}),
         actor=f"reviewer:{REVIEWER}")
@@ -154,8 +209,7 @@ def _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewe
                           claim_detail=f"независимый Reviewer {verdict_reviewer}: {reviewer_findings[:3]}",
                           acceptance=pkg["acceptance"], freshness=pkg["freshness"],
                           license_present=True, license_spdx="Apache-2.0")
-    facts = ReviewFacts(current_head=head,
-                        evidence_present=["ev:vp7-accept-33", "ev:chrome-manifest", "ev:vp6-e2e-manifest"])
+    facts = resolve_review_facts(pkg, expected_head=head)  # доверенные факты из store + файлов
     outcome = QualityService().review(pkg, ctx, facts, run_id="run_final", actor=f"reviewer:{REVIEWER}")
     return pkg, outcome
 
@@ -174,6 +228,22 @@ def main():
     if local_head != head:
         print(f"  BLOCKER: локальный HEAD {local_head[:12]} != заявленный {head[:12]}. Fail-closed.")
         return {"ok": False, "blocker": "head mismatch"}
+
+    # Точный base SHA + сверка live main == PR base == reviewed base (§3, fail-closed).
+    base_sha, base_detail = resolve_and_verify_base(repo, base, pr)
+    if not base_detail["ok"]:
+        print(f"  BLOCKER: base SHA рассинхронизирован: {base_detail}. Fail-closed.")
+        return {"ok": False, "blocker": "base sha mismatch", "base_detail": base_detail}
+    print(f"  base SHA (точный): {base_sha[:12]} == live main == PR base ✓")
+
+    # Свежий детерминированный acceptance (§3): реальные command/exit/count/timestamp,
+    # не хардкод. Изолированный DB внутри самого acceptance. Fail-closed при не-COMPLETE.
+    accept = run_fresh_acceptance()
+    if accept["exit_code"] != 0 or accept["total"] == 0 or accept["passed"] != accept["total"]:
+        print(f"  BLOCKER: acceptance не COMPLETE ({accept['passed']}/{accept['total']}, "
+              f"exit={accept['exit_code']}). Provider не вызывается.")
+        return {"ok": False, "blocker": "acceptance incomplete", "accept": accept}
+    print(f"  acceptance: {accept['passed']}/{accept['total']} exit={accept['exit_code']} @ {accept['timestamp']}")
 
     injected_verdict = (os.environ.get("VP7_REVIEWER_VERDICT", "").upper() or None)
     injected_findings = json.loads(os.environ.get("VP7_REVIEWER_FINDINGS", "[]"))
@@ -215,18 +285,35 @@ def main():
     os.chmod(diff_file, 0o644)
     print(f"  Полный diff: {len(files)} файлов, +{ins}/-{dele}, {len(full_diff)} байт → {diff_file.name}")
 
+    # Durable-регистрация реальных evidence-файлов под точным head (§2/§3): факты
+    # gate выводятся из этого store + пересчёта файлов, не из хардкода.
+    ev_refs, ev_arts, ev_details = collect_and_register_evidence(head)
+    print(f"  evidence зарегистрировано: {len(ev_refs)} ссылок → {[d['ref'] for d in ev_details]}")
+
+    # acceptance-матрица RP из РЕАЛЬНЫХ результатов (не хардкод счётчиков).
+    acceptance = [
+        {"criterion": f"run_vp7_acceptance {accept['passed']}/{accept['total']}",
+         "check": "deterministic", "passed": accept["passed"] == accept["total"],
+         "command": accept["command"], "exit_code": accept["exit_code"],
+         "timestamp": accept["timestamp"], "source": accept["source"], "head": head},
+        {"criterion": "CI required-context policy GREEN на текущем head",
+         "check": "gh (GhForge.checks)", "passed": True, "head": head,
+         "source": "atlas_core.github_adapter.classify_check_runs"},
+    ] + [{"criterion": f"evidence {d['ref']} разрешимо ({d['source']})",
+          "check": "sha256", "passed": True, "sha256": d["sha256"], "head": head}
+         for d in ev_details]
+
     evidence_ctx = os.environ.get("VP7_EVIDENCE_CTX") or (
-        "run_vp7_acceptance 34/34 COMPLETE; Python-регрессия 383 OK; ruff clean; "
-        "Chrome 48/48 (34 shots, 0 PII, 1440/1024/768/390, RU/EN, reduced-motion); "
-        "миграции empty→0007 и seeded 0006→0007→downgrade→head OK (данные сохранены, "
-        "живая БД осталась 0006); реальные пробы ёмкости: codex 68%/96%, claude 5h "
-        "allowed/rejected; официальный Claude stream-json rate_limit_event; used_% Claude "
-        "onboarding-gated (доказано); Claude-пул routing (11 тестов); stale-fallback/cooldown/"
-        "single-flight; secret/privacy-скан ЧИСТО; CI 8/8 зелёный на текущем head.")
+        f"run_vp7_acceptance {accept['passed']}/{accept['total']} exit={accept['exit_code']} "
+        f"@ {accept['timestamp']} (source {accept['source']}); durable evidence для head "
+        f"{head[:12]}: {', '.join(d['ref'] for d in ev_details) or '(нет)'}; CI по "
+        f"required-context policy (4 обязательные job present+success); base "
+        f"{base_sha[:12]} == live main == PR base; секрет/privacy-скан — см. §4 отчёт.")
 
     # DRY-RUN валидация Quality/merge-gate конструкторов ДО provider-вызова (fail fast).
     try:
-        _build_quality(repo, base, head, files, ins, dele, "REVISE", ["dry-run"], stat)
+        _build_quality(base_sha, head, files, ins, dele, "REVISE", ["dry-run"], stat,
+                       acceptance=acceptance, evidence_refs=ev_refs, artifact_hashes=ev_arts)
     except Exception as exc:  # noqa: BLE001
         print(f"  BLOCKER: Quality-конструкторы невалидны ({type(exc).__name__}: {exc}). Provider не вызывается.")
         return {"ok": False, "blocker": "quality construction invalid"}
@@ -276,8 +363,10 @@ def main():
         print(f"  Reviewer verdict: {verdict_reviewer} findings={len(reviewer_findings)} "
               f"checked_files={len(checked_files)}")
 
-    # реальный SHA-bound ReviewPackage + QualityReport
-    pkg, outcome = _build_quality(repo, base, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat)
+    # реальный SHA-bound evidence-backed ReviewPackage + QualityReport
+    pkg, outcome = _build_quality(base_sha, head, files, ins, dele, verdict_reviewer,
+                                  reviewer_findings, stat, acceptance=acceptance,
+                                  evidence_refs=ev_refs, artifact_hashes=ev_arts)
     print(f"  Quality verdict: {outcome.verdict} gate={outcome.gate_fired}")
 
     # PRODUCTION merge-путь (Fix1): единственный GitHubAdapter.merge_pull_request через
@@ -316,7 +405,9 @@ def main():
     evidence = {
         "merge_executed": merged_result is not None,
         "merge_result": merged_result,
-        "repo": repo, "base": base, "head_sha": head, "pr": pr,
+        "repo": repo, "base": base, "base_sha": base_sha, "base_verification": base_detail,
+        "head_sha": head, "pr": pr,
+        "acceptance": accept, "evidence_registered": ev_details,
         "diff": {"files": len(files), "insertions": ins, "deletions": dele, "diff_bytes": len(full_diff)},
         "reviewer_profile": REVIEWER, "reviewer_independent": True, "reviewer_cwd": str(_ROOT),
         "reviewer_verdict": verdict_reviewer, "reviewer_findings": reviewer_findings,
@@ -376,7 +467,10 @@ def _selftest():
     for verdict, findings, expect_q in (("PASS", [], "PASS"), ("REVISE", ["issue"], "REVISE"),
                                         ("", [], "REVISE"), ("garbage", [], "REVISE")):
         vr = verdict if verdict in ("PASS", "REVISE") else "REVISE"
-        _pkg, outcome = _build_quality("r", "main", "H" * 40, ["a.py"], 1, 0, vr, findings, "stat")
+        _pkg, outcome = _build_quality(
+            "b" * 40, "H" * 40, ["a.py"], 1, 0, vr, findings, "stat",
+            acceptance=[{"criterion": "selftest", "check": "fixture", "passed": True}],
+            evidence_refs=[], artifact_hashes=[])
         ok = outcome.verdict == expect_q
         results.append((verdict or "<empty>", vr, outcome.verdict, ok))
         print(f"  selftest verdict={verdict or '<empty>'!r:12} → reviewer={vr} quality={outcome.verdict} "
