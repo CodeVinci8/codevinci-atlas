@@ -100,6 +100,14 @@
   rollback (Run→CANCELLED, откат ветки); (2) `NEXT.md` рассинхронизирован (call 9/9) →
   приведён к факту. Исправлены с тестами; merge не исполнялся. call-7…16 immutable;
   NEXT — **call 17**.
+- **call 17** (head `be94175`, codex-plus-02, независим) → genuine **REVISE** (1,
+  критично): межпроцессный Emergency TOCTOU — `_ENGAGING` виден лишь текущему процессу,
+  окно снимок→durable-commit давало другому процессу вставить QUEUED Run. **Fix:**
+  `engage()` коммитит durable `active=True` ПЕРВЫМ (до снимка); SQLite сериализует
+  commit'ы → линеаризация по барьеру. Тест `test_engage_durable_barrier_committed_before_snapshot`.
+  (Две попытки вызова были технически прерваны средой до вердикта — §6 повтор на
+  неизменном head; вердикт дала третья.) merge не исполнялся. call-7…17 immutable;
+  NEXT — **call 18**.
 - **Аккаунты Claude (текущая правда):** активен ТОЛЬКО **`claude-pro-01`**;
   `claude-pro-02` — истёкшая вторая подписка, **disabled** (не в активном пуле/UI/
   ёмкости; unix-user/home/creds не удалены; история сохранена). Второй Claude

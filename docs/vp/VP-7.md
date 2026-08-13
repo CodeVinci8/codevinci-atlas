@@ -384,6 +384,30 @@ diff `541c534` вернул genuine **REVISE** (2 находки), merge НЕ и
 секрет-скан ЧИСТО; live БД остаётся `0006`. call-7…16 immutable. NEXT: **call 17** по
 исправленному зелёному head.
 
+### call 17 — genuine REVISE (head `be94175`, codex-plus-02)
+
+Независимый Reviewer (codex-plus-02, read-only, session present, 16 файлов) на полном
+diff `be94175` вернул genuine **REVISE** (1 находка), merge НЕ исполнялся. (Две
+предыдущие попытки вызова были технически прерваны средой ДО вердикта — по §6 допустим
+повтор на неизменном head; genuine-вердикт дала третья попытка.)
+
+**Находка (критично):** Emergency Stop/replay имели **межпроцессный** TOCTOU:
+`emergency._ENGAGING` — только `threading.Event` текущего процесса. Если `engage()`
+идёт в Core, а replay/start — в другом Core/Runner-процессе, второй процесс не видит
+`_ENGAGING`; в окне между снимком `_interrupt_active_runs()` и durable-commit
+`emergency_stops` он мог вставить QUEUED Run, а post-insert `blocks_new_jobs()` тоже
+увидел бы durable active=false. **Fix:** `engage()` коммитит durable-барьер `active=True`
+**ПЕРВЫМ — ДО** снимка active-runs (списки прерванных/снятых дозаписываются в строку
+после). SQLite сериализует commit'ы → линеаризация по барьеру: Run, закоммиченный до
+барьера, попадёт в снимок и будет прерван; закоммиченный после — его post-insert
+durable `is_active()`-recheck (в любом процессе) увидит active=True и откатит job. Тест
+`test_engage_durable_barrier_committed_before_snapshot`.
+
+Находка исправлена; **merge не исполнялся, PASS не фабриковался**. Валидация: регрессия
+**447 OK**; acceptance 34/34; Web i18n 736/736 + tsc + build; Chrome 50/50; секрет-скан
+ЧИСТО; live БД остаётся `0006`. call-7…17 immutable. NEXT: **call 18** по исправленному
+зелёному head.
+
 ## Границы (не VP-8/VP-9)
 
 Полный операционный Profiles-console (4→40, login/refresh/quotas/usage-history)

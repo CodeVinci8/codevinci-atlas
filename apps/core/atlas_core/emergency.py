@@ -75,17 +75,33 @@ def engage(*, reason: str = "", actor: str = "owner", correlation_id: str = "") 
         return status()
 
     # call-9 fix (TOCTOU): пометить «engage начался» ПЕРВЫМ действием — с этого
-    # момента blocks_new_jobs() истинно, и любой новый/re-checking job аборт-ится
-    # ещё до durable-commit. Снимаем флаг в finally после commit (истину держит
-    # durable active=True).
+    # момента blocks_new_jobs() истинно в ЭТОМ процессе. Снимаем флаг в finally
+    # (истину держит durable active=True).
     _ENGAGING.set()
     try:
         audit.record("emergency.stop.engaged.before",
                      f"reason={redact(reason)[:60]}", actor=actor, correlation_id=correlation_id)
 
+        import json as _json
+        sid = new_id("estop")
+        now = _now()
+        # call-17 fix (МЕЖПРОЦЕССНЫЙ TOCTOU): durable-барьер active=True КОММИТИТСЯ
+        # ПЕРВЫМ — ДО снимка active-runs. in-process _ENGAGING виден лишь текущему
+        # процессу; replay/job-start в ДРУГОМ Core/Runner-процессе читает только durable
+        # is_active(). Поэтому durable-commit обязан предшествовать снимку: SQLite
+        # сериализует commit'ы, давая линеаризацию по этому барьеру — Run, закоммиченный
+        # ДО барьера, попадёт в снимок и будет прерван; закоммиченный ПОСЛЕ — его
+        # post-insert is_active()-recheck (в любом процессе) увидит active=True и
+        # откатит job. Списки прерванных/снятых дозаписываются в строку ПОСЛЕ.
+        with session_scope() as s:
+            s.add(EmergencyStop(
+                id=sid, action="ENGAGED", active=True, reason=redact(reason)[:800],
+                actor=actor, correlation_id=correlation_id,
+                interrupted_runs_json="[]", released_leases_json="[]", created_at=now))
+            s.commit()
+
         # call-8 C: немедленно прервать in-flight Builder-процессы (сигналы группе).
-        # Порядок с _ENGAGING гарантирует: job, зарегистрировавшийся до снимка, будет
-        # отменён; стартующий после — увидит blocks_new_jobs() и аборт-ится.
+        # Барьер уже durable-активен, поэтому job, стартующий в любом процессе, аборт-ится.
         try:
             from .runtime import cancel_all_jobs
             cancelled_jobs = cancel_all_jobs()
@@ -97,17 +113,11 @@ def engage(*, reason: str = "", actor: str = "owner", correlation_id: str = "") 
 
         interrupted = _interrupt_active_runs(correlation_id=correlation_id)
         released = _release_active_leases()
-
-        import json as _json
-        sid = new_id("estop")
-        now = _now()
+        # Дозаписать в durable-строку списки прерванных Run/снятых leases (барьер активен).
         with session_scope() as s:
-            s.add(EmergencyStop(
-                id=sid, action="ENGAGED", active=True, reason=redact(reason)[:800],
-                actor=actor, correlation_id=correlation_id,
+            s.execute(update(EmergencyStop).where(EmergencyStop.id == sid).values(
                 interrupted_runs_json=_json.dumps(interrupted, ensure_ascii=False),
-                released_leases_json=_json.dumps(released, ensure_ascii=False),
-                created_at=now))
+                released_leases_json=_json.dumps(released, ensure_ascii=False)))
             s.commit()
         audit.record("emergency.stop.engaged.after",
                      f"interrupted={len(interrupted)} released={len(released)}",

@@ -227,6 +227,28 @@ class TestEmergencyStop(VP7Base):
             lease = s.get(RunLease, st["released_leases"][0].split(":")[1])
             self.assertNotEqual(lease.released_at, "")  # release, не delete
 
+    # --- call-17 fix (межпроцессный TOCTOU): durable barrier active=True commit'ится ---
+    # --- ДО снимка active-runs, чтобы другой процесс видел стоп до снимка. ---
+    def test_engage_durable_barrier_committed_before_snapshot(self):
+        from atlas_core import emergency
+        seen = {}
+        real_interrupt = emergency._interrupt_active_runs
+
+        def spy(**kw):
+            # durable is_active() (свежее чтение таблицы) — то, что видит ДРУГОЙ процесс
+            seen["active_at_snapshot"] = emergency.is_active()
+            return real_interrupt(**kw)
+
+        emergency._interrupt_active_runs = spy
+        try:
+            emergency.engage(reason="x", actor="owner")
+        finally:
+            emergency._interrupt_active_runs = real_interrupt
+            emergency.resume(actor="owner")
+        self.assertTrue(seen.get("active_at_snapshot"),
+                        "durable active=True должен быть закоммичен ДО снимка active-runs "
+                        "(иначе другой процесс не увидит стоп в окне снимок→commit)")
+
     def test_survives_restart_and_requires_explicit_resume(self):
         from atlas_core import emergency
         emergency.engage(reason="x")

@@ -61,10 +61,12 @@ Reviewer до genuine current-head PASS. **Immutable история:** call 7…
 gate вернул `MISSING_EVIDENCE` → merge не исполнен (реальный evidence-gate дефект);
 call **15** (head `d788bd1`, codex-plus-02) — genuine **REVISE** (evidence-store
 самодостаточность + replay Emergency-окно); call **16** (head `541c534`, codex-plus-02)
-— genuine **REVISE** (replay check-then-insert TOCTOU + рассинхрон durable-truth).
-Находки call 15/16 исправлены с тестами. call 14 НЕ переименовывается в REVISE.
+— genuine **REVISE** (replay check-then-insert TOCTOU + рассинхрон durable-truth);
+call **17** (head `be94175`, codex-plus-02) — genuine **REVISE** (межпроцессный
+Emergency TOCTOU: durable-барьер `active=True` теперь коммитится ДО снимка active-runs).
+Находки call 15/16/17 исправлены с тестами. call 14 НЕ переименовывается в REVISE.
 
-**Следующий шаг:** независимый Reviewer **call 17** по исправленному зелёному head
+**Следующий шаг:** независимый Reviewer **call 18** по исправленному зелёному head
 (после commit/push и зелёного CI на точном PR head). При genuine PASS — авторитетный
 evidence-backed STANDARD-merge PR #13 (`authorize_merge_execution`=MERGE_PERMITTED,
 `VP7_EXECUTE_MERGE=1`, `--match-head-commit`), backup, миграция `0006→0007`, рестарт
