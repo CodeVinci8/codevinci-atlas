@@ -89,5 +89,72 @@ class TestTargetedTestsCannotBeBypassed(unittest.TestCase):
         self.assertIn("tests.test_extra", mods)
 
 
+class TestReviewerResponseFailClosed(unittest.TestCase):
+    """call-25 F2: PASS merge-eligible только при структурно полном ответе."""
+
+    def test_complete_pass_accepted(self):
+        v, f, c = H._evaluate_reviewer_response(
+            {"verdict": "PASS", "findings": [], "checked_files": ["a.py", "b.py"]},
+            session_id="sess-1")
+        self.assertEqual(v, "PASS")
+        self.assertEqual(c, ["a.py", "b.py"])
+
+    def test_pass_without_checked_files_downgraded(self):
+        v, _f, _c = H._evaluate_reviewer_response(
+            {"verdict": "PASS", "findings": [], "checked_files": []}, session_id="sess-1")
+        self.assertEqual(v, "REVISE")
+
+    def test_pass_without_session_downgraded(self):
+        v, _f, _c = H._evaluate_reviewer_response(
+            {"verdict": "PASS", "findings": [], "checked_files": ["a.py"]}, session_id=None)
+        self.assertEqual(v, "REVISE")
+
+    def test_pass_with_invalid_findings_downgraded(self):
+        v, _f, _c = H._evaluate_reviewer_response(
+            {"verdict": "PASS", "findings": "oops", "checked_files": ["a.py"]},
+            session_id="s")
+        self.assertEqual(v, "REVISE")
+
+    def test_malformed_and_empty_are_revise(self):
+        for out in ({}, {"verdict": ""}, {"verdict": "garbage"}, None,
+                    {"verdict": "REVISE", "findings": ["x"], "checked_files": []}):
+            v, _f, _c = H._evaluate_reviewer_response(out, session_id="s")
+            self.assertEqual(v, "REVISE")
+
+
+class TestDiffScopeFailClosed(unittest.TestCase):
+    """call-25 F1: сбойный/пустой diff-скоуп не доходит до Reviewer."""
+
+    def _ok_args(self, **over):
+        args = dict(fetch_rc=0, diff_rcs=[0, 0, 0, 0], files=["a.py"],
+                    full_diff="diff --git a/a.py b/a.py\n+x\n", ins=1, dele=0)
+        args.update(over)
+        return args
+
+    def test_valid_scope_ok(self):
+        ok, err = H._diff_scope_ok(**self._ok_args())
+        self.assertTrue(ok, err)
+
+    def test_fetch_failure_blocks(self):
+        ok, _e = H._diff_scope_ok(**self._ok_args(fetch_rc=1))
+        self.assertFalse(ok)
+
+    def test_diff_rc_failure_blocks(self):
+        ok, _e = H._diff_scope_ok(**self._ok_args(diff_rcs=[0, 0, 128, 0]))
+        self.assertFalse(ok)
+
+    def test_empty_files_blocks(self):
+        ok, _e = H._diff_scope_ok(**self._ok_args(files=[]))
+        self.assertFalse(ok)
+
+    def test_empty_diff_blocks(self):
+        ok, _e = H._diff_scope_ok(**self._ok_args(full_diff="   \n"))
+        self.assertFalse(ok)
+
+    def test_zero_change_volume_blocks(self):
+        ok, _e = H._diff_scope_ok(**self._ok_args(ins=0, dele=0))
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

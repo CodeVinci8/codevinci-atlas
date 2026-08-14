@@ -176,6 +176,47 @@ def run_targeted_tests() -> dict:
             "passed_tests": names, "timestamp": ts, "log_tail": out[-600:]}
 
 
+def _diff_scope_ok(*, fetch_rc: int, diff_rcs: list[int], files: list[str],
+                   full_diff: str, ins: int, dele: int) -> tuple[bool, str]:
+    """Проверить, что diff-скоуп вычислен УСПЕШНО и НЕ пуст (call-25 F1). Сбойный/пустой
+    diff не должен дойти до Reviewer и стать тривиальным PASS — fail-closed до provider."""
+    if fetch_rc != 0:
+        return False, "git fetch base не удался"
+    if any(rc != 0 for rc in diff_rcs):
+        return False, "git diff вернул ненулевой код"
+    if not files:
+        return False, "пустой список изменённых файлов"
+    if not full_diff.strip():
+        return False, "пустой полный diff"
+    if (ins + dele) <= 0:
+        return False, "нулевой объём изменений (+0/-0)"
+    return True, ""
+
+
+def _valid_str_list(x) -> bool:
+    return isinstance(x, list) and all(isinstance(i, str) for i in x)
+
+
+def _evaluate_reviewer_response(out: dict, *, session_id) -> tuple[str, list, list]:
+    """Строгая fail-closed валидация структурного ответа Reviewer (call-25 F2).
+
+    verdict=PASS становится merge-eligible ТОЛЬКО при структурно ПОЛНОМ ответе: findings —
+    список строк, checked_files — НЕПУСТОЙ список строк (Reviewer реально смотрел файлы),
+    присутствует provider session. Иначе (в т.ч. пустой/malformed) → REVISE. REVISE и
+    любой не-PASS принимаются как REVISE."""
+    out = out or {}
+    raw = str(out.get("verdict", "")).upper()
+    findings = out.get("findings", []) if _valid_str_list(out.get("findings", [])) else []
+    checked = out.get("checked_files", []) if _valid_str_list(out.get("checked_files", [])) else []
+    if raw == "PASS":
+        complete = (_valid_str_list(out.get("findings", []))
+                    and len(checked) > 0 and bool(session_id))
+        if not complete:
+            return "REVISE", (findings or ["(структурно неполный PASS-ответ → REVISE)"]), checked
+        return "PASS", findings, checked
+    return "REVISE", findings, checked
+
+
 # ОБЯЗАТЕЛЬНАЯ evidence-политика финального review (§2): набор фиксирован и НЕ
 # сжимается до «какие файлы оказались на диске». Отсутствие любого обязательного
 # evidence → STOP до provider-вызова (а не тихий silent-shrink).
@@ -392,14 +433,27 @@ def main():
                           source_location=repo, status="connected", created_at=_now(), updated_at=_now()))
             s.commit()
 
-    # Реальный ПОЛНЫЙ diff origin/main...HEAD (merge-base семантика).
-    sh(["git", "-C", str(_ROOT), "fetch", "origin", base, "--quiet"])
-    files = sh(["git", "-C", str(_ROOT), "diff", "--name-only", f"origin/{base}...{head}"]).stdout.strip().splitlines()
-    stat = sh(["git", "-C", str(_ROOT), "diff", "--stat", f"origin/{base}...{head}"]).stdout.strip()
-    numstat = sh(["git", "-C", str(_ROOT), "diff", "--numstat", f"origin/{base}...{head}"]).stdout.strip()
+    # Реальный ПОЛНЫЙ diff origin/main...HEAD (merge-base семантика). Проверяем
+    # returncode каждой git-команды и непустоту diff (call-25 F1): сбойный/пустой diff
+    # не должен дойти до Reviewer и стать тривиальным PASS.
+    fetch = sh(["git", "-C", str(_ROOT), "fetch", "origin", base, "--quiet"])
+    r_files = sh(["git", "-C", str(_ROOT), "diff", "--name-only", f"origin/{base}...{head}"])
+    r_stat = sh(["git", "-C", str(_ROOT), "diff", "--stat", f"origin/{base}...{head}"])
+    r_numstat = sh(["git", "-C", str(_ROOT), "diff", "--numstat", f"origin/{base}...{head}"])
+    r_diff = sh(["git", "-C", str(_ROOT), "diff", f"origin/{base}...{head}"])
+    files = r_files.stdout.strip().splitlines()
+    stat = r_stat.stdout.strip()
+    numstat = r_numstat.stdout.strip()
     ins = sum(int(x.split("\t")[0]) for x in numstat.splitlines() if x.split("\t")[0].isdigit())
     dele = sum(int(x.split("\t")[1]) for x in numstat.splitlines() if x.split("\t")[1].isdigit())
-    full_diff = sh(["git", "-C", str(_ROOT), "diff", f"origin/{base}...{head}"]).stdout
+    full_diff = r_diff.stdout
+    ok_scope, scope_err = _diff_scope_ok(
+        fetch_rc=fetch.returncode,
+        diff_rcs=[r_files.returncode, r_stat.returncode, r_numstat.returncode, r_diff.returncode],
+        files=files, full_diff=full_diff, ins=ins, dele=dele)
+    if not ok_scope:
+        print(f"  BLOCKER: diff-скоуп невалиден ({scope_err}). Provider не вызывается.")
+        return {"ok": False, "blocker": f"diff scope invalid: {scope_err}"}
     # world-readable файл с реальным полным diff — Reviewer его прочитает из cwd=repo
     diff_file = _ROOT / ".vp7-review-diff.patch"
     diff_file.write_text(full_diff, encoding="utf-8")
@@ -489,11 +543,10 @@ def main():
         out = res.result.structured_output or {}
         # ПЕРСИСТ структурного ответа СРАЗУ (до Quality-обработки).
         _persist("reviewer_raw.json", {"structured": out, "session_present": bool(res.result.session_id)})
-        raw_verdict = str(out.get("verdict", "")).upper()
-        # fail-closed: пустой/malformed → REVISE
-        verdict_reviewer = raw_verdict if raw_verdict in ("PASS", "REVISE") else "REVISE"
-        reviewer_findings = out.get("findings", []) if isinstance(out.get("findings"), list) else []
-        checked_files = out.get("checked_files", []) if isinstance(out.get("checked_files"), list) else []
+        # Строгая fail-closed валидация ответа (call-25 F2): PASS merge-eligible только
+        # при структурно полном ответе (findings-строки, непустой checked_files, session).
+        verdict_reviewer, reviewer_findings, checked_files = _evaluate_reviewer_response(
+            out, session_id=res.result.session_id)
         reviewer_session = "present" if res.result.session_id else ""
         print(f"  Reviewer verdict: {verdict_reviewer} findings={len(reviewer_findings)} "
               f"checked_files={len(checked_files)}")
