@@ -115,6 +115,13 @@ class TestReviewerResponseFailClosed(unittest.TestCase):
             session_id="s")
         self.assertEqual(v, "REVISE")
 
+    def test_pass_with_empty_string_checked_files_downgraded(self):
+        # call-26 F2: [""] формально непустой список, но не реально проверенные файлы.
+        for cf in ([""], ["   "], ["", "  "]):
+            v, _f, _c = H._evaluate_reviewer_response(
+                {"verdict": "PASS", "findings": [], "checked_files": cf}, session_id="s")
+            self.assertEqual(v, "REVISE", cf)
+
     def test_malformed_and_empty_are_revise(self):
         for out in ({}, {"verdict": ""}, {"verdict": "garbage"}, None,
                     {"verdict": "REVISE", "findings": ["x"], "checked_files": []}):

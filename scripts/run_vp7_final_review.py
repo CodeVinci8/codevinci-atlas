@@ -68,6 +68,8 @@ REGISTRY = "/var/lib/codevinci-atlas/profiles/registry.json"
 # поэтому выбираем материально более безопасную ёмкость (owner-правило). Override —
 # через VP7_REVIEWER, если owner явно назначит иной независимый alias.
 REVIEWER = os.environ.get("VP7_REVIEWER") or "codex-plus-01"
+# Строгий JSON-контракт ответа Reviewer (codex exec --output-schema).
+_REVIEWER_RESPONSE_SCHEMA = _ROOT / "contracts" / "schemas" / "vp7-reviewer-response.json"
 # Инъекция допускается ТОЛЬКО для сохранения исторического REVISE — не для merge.
 _INJECT_MERGE_INELIGIBLE = True
 
@@ -208,9 +210,12 @@ def _evaluate_reviewer_response(out: dict, *, session_id) -> tuple[str, list, li
     raw = str(out.get("verdict", "")).upper()
     findings = out.get("findings", []) if _valid_str_list(out.get("findings", [])) else []
     checked = out.get("checked_files", []) if _valid_str_list(out.get("checked_files", [])) else []
+    # call-26 F2: непустой список из ПУСТЫХ строк (checked_files=[""]) не считается
+    # реально проверенными файлами — требуем хотя бы одну непустую строку.
+    checked_nonempty = [c for c in checked if c.strip()]
     if raw == "PASS":
         complete = (_valid_str_list(out.get("findings", []))
-                    and len(checked) > 0 and bool(session_id))
+                    and len(checked_nonempty) > 0 and bool(session_id))
         if not complete:
             return "REVISE", (findings or ["(структурно неполный PASS-ответ → REVISE)"]), checked
         return "PASS", findings, checked
@@ -530,8 +535,11 @@ def main():
             return {"ok": False, "blocker": f"{REVIEWER} not authenticated"}
         prompt = _reviewer_prompt(repo, base, head, files, ins, dele,
                                   str(diff_file), old_findings, evidence_ctx, scope)
+        # Строгий структурный контракт ответа на уровне CLI (call-26 F1): codex exec
+        # получает --output-schema, а не только текст prompt + постобработку.
         job = JobPackage(goal=prompt, role=Role.REVIEWER, provider=Provider.CODEX,
-                         inputs={"cwd": str(_ROOT), "timeout_s": 400})  # cwd = РЕПОЗИТОРИЙ
+                         inputs={"cwd": str(_ROOT), "timeout_s": 400},  # cwd = РЕПОЗИТОРИЙ
+                         output_schema_ref=str(_REVIEWER_RESPONSE_SCHEMA))
         print(f"  [call {REVIEW_CALL}] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
         try:
             res = cx.start(job, profile_alias=REVIEWER, root_path=reg["root_path"],
