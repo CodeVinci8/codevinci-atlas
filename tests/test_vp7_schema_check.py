@@ -1,11 +1,15 @@
 """VP-7 deploy-safety: read-only проверка совместимости схемы при обычном старте Core.
 
-Обычный boot Core больше НЕ мигрирует живую БД: он лишь сравнивает ревизию БД с head
-и fail-closed при несовпадении. Здесь проверяем:
+Обычный boot Core больше НЕ мигрирует живую БД: он лишь сравнивает множество ревизий
+БД с head-множеством кода и fail-closed при любом несовпадении. Проверяем (в т.ч.
+call-22 findings):
 
-* совместимая схема (head) → OK, БД не изменена;
-* старая схема (0006) → fail-closed (EXIT_INCOMPATIBLE), БД НЕ мигрирована;
-* отсутствующая БД → fail-closed и файл БД НЕ создан (read-only, без побочных эффектов).
+* совместимая схема (единственный head) → OK, БД не изменена;
+* старая схема (0006) → fail-closed, БД НЕ мигрирована;
+* отсутствующая БД → fail-closed и файл БД НЕ создан;
+* F1: head + лишняя (мультиголовая) ревизия → fail-closed (не ложное «совместимо»);
+* F2: чтение строго read-only — запись в файл БД невозможна и не создаются
+  побочные ``-wal``/``-shm`` при чистом состоянии (WAL-БД).
 """
 
 from __future__ import annotations
@@ -37,19 +41,29 @@ class TestSchemaCheck(unittest.TestCase):
     def _db_path(self) -> str:
         return os.path.join(self.tmp, "atlas.db")
 
-    def _make_db(self, version):
+    def _make_db(self, versions, *, wal=False):
+        """versions: строка (одна ревизия) | список | None (нет строк)."""
         c = sqlite3.connect(self._db_path())
+        if wal:
+            c.execute("PRAGMA journal_mode=wal")
         c.execute("CREATE TABLE alembic_version (version_num varchar(32) NOT NULL)")
-        if version is not None:
-            c.execute("INSERT INTO alembic_version (version_num) VALUES (?)", (version,))
+        if versions is not None:
+            if isinstance(versions, str):
+                versions = [versions]
+            for v in versions:
+                c.execute("INSERT INTO alembic_version (version_num) VALUES (?)", (v,))
         c.commit()
         c.close()
+        # чистое состояние: убрать любые sidecar после закрытия
+        for s in ("-wal", "-shm"):
+            p = self._db_path() + s
+            if os.path.exists(p):
+                os.remove(p)
 
-    def _db_version(self):
+    def _db_versions(self):
         c = sqlite3.connect(self._db_path())
         try:
-            r = c.execute("SELECT version_num FROM alembic_version").fetchone()
-            return r[0] if r else None
+            return sorted(r[0] for r in c.execute("SELECT version_num FROM alembic_version"))
         finally:
             c.close()
 
@@ -59,28 +73,51 @@ class TestSchemaCheck(unittest.TestCase):
         self.assertEqual(head, "0007_autonomy_github_time_machine")
         self._make_db(head)
         self.assertEqual(schema_check.check(), schema_check.EXIT_OK)
-        # обычный boot НЕ мигрирует: ревизия не изменилась.
-        self.assertEqual(self._db_version(), head)
+        self.assertEqual(self._db_versions(), [head])
 
     def test_old_schema_fails_closed_without_migrating(self):
         from atlas_core import schema_check
         self._make_db("0006_review_quality")
-        rc = schema_check.check()
-        self.assertEqual(rc, schema_check.EXIT_INCOMPATIBLE)
-        # fail-closed: НЕ мигрировано молча, осталось 0006.
-        self.assertEqual(self._db_version(), "0006_review_quality")
+        self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
+        self.assertEqual(self._db_versions(), ["0006_review_quality"])
 
     def test_missing_db_fails_closed_and_creates_no_file(self):
         from atlas_core import schema_check
         self.assertFalse(os.path.exists(self._db_path()))
-        rc = schema_check.check()
-        self.assertEqual(rc, schema_check.EXIT_INCOMPATIBLE)
-        # read-only: проверка НЕ создаёт пустой файл БД как побочный эффект.
+        self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
         self.assertFalse(os.path.exists(self._db_path()))
 
-    def test_current_revision_missing_file_returns_none_no_side_effect(self):
+    # --- F1: мультиголовая БД не признаётся совместимой ---
+    def test_head_plus_extra_revision_fails_closed(self):
         from atlas_core import schema_check
-        self.assertIsNone(schema_check.current_revision(self._db_path()))
+        head = schema_check.head_revision()
+        # head присутствует, но есть ВТОРАЯ несовместимая ветка → множества не равны.
+        self._make_db([head, "deadbeefbranch"])
+        self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
+        # ничего не мигрировано/не стёрто.
+        self.assertEqual(self._db_versions(), sorted([head, "deadbeefbranch"]))
+
+    def test_current_revisions_returns_full_set(self):
+        from atlas_core import schema_check
+        head = schema_check.head_revision()
+        self._make_db([head, "otherhead"])
+        self.assertEqual(schema_check.current_revisions(self._db_path()),
+                         frozenset({head, "otherhead"}))
+
+    # --- F2: строго read-only, без side-writes ---
+    def test_read_only_no_write_no_sidecars_on_wal_db(self):
+        from atlas_core import schema_check
+        head = schema_check.head_revision()
+        self._make_db(head, wal=True)  # WAL-режим, sidecar убраны (чистое состояние)
+        before = sorted(os.listdir(self.tmp))
+        self.assertEqual(schema_check.current_revisions(self._db_path()), frozenset({head}))
+        after = sorted(os.listdir(self.tmp))
+        # чистое состояние → immutable=1: НИКАКИХ новых -wal/-shm, файл БД не изменён.
+        self.assertEqual(before, after, f"побочные sidecar-файлы: {set(after) - set(before)}")
+
+    def test_current_revisions_missing_file_returns_empty_no_side_effect(self):
+        from atlas_core import schema_check
+        self.assertEqual(schema_check.current_revisions(self._db_path()), frozenset())
         self.assertFalse(os.path.exists(self._db_path()))
 
 

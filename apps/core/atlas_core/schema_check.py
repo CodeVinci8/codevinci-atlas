@@ -1,19 +1,28 @@
 """Read-only проверка совместимости схемы БД при обычном старте Core (VP-7 deploy-safety).
 
-Обычный boot Core **не** мигрирует живую БД: он лишь СРАВНИВАЕТ текущую ревизию
-Alembic в БД с head-ревизией кода и fail-closed с явной ошибкой при несовпадении.
-Так Core никогда не стартует на несовместимой/старой схеме молча и не выполняет
-неявную живую миграцию при каждой перезагрузке контейнера (§34, deploy-safety).
+Обычный boot Core **не** мигрирует живую БД: он лишь СРАВНИВАЕТ ревизии Alembic в БД
+с head-ревизиями кода и fail-closed при любом несовпадении. Так Core никогда не
+стартует на несовместимой/старой/мультиголовой схеме молча и не выполняет неявную
+живую миграцию при каждой перезагрузке контейнера (§34, deploy-safety).
+
+Инварианты (call-22 findings):
+* сравниваются **множества** ревизий: весь ``alembic_version`` (все current heads БД)
+  против всех head-ревизий кода — совместимо ТОЛЬКО при точном равенстве множеств
+  (лишняя/чужая/вторая ветка в БД → fail-closed, а не ложное «совместимо»);
+* открытие БД **строго read-only** через SQLite URI: ``immutable=1`` в чистом
+  состоянии (без каких-либо side-writes ``-wal``/``-shm``), ``mode=ro`` только при
+  реально «горячем» непустом WAL (чтение закоммиченного состояния). В файл БД запись
+  невозможна.
 
 Живая миграция выполняется ТОЛЬКО отдельной одноразовой авторизованной deploy-
-командой (``ATLAS_RUN_MIGRATIONS=1`` в entrypoint, после backup-first, §8). Здесь
-миграции не запускаются — только чтение ``alembic_version``. Никаких секретов в
-вывод не попадает (только имена ревизий).
+командой (``ATLAS_RUN_MIGRATIONS=1``, после backup-first, §8). Секреты в вывод не
+попадают (только имена ревизий).
 """
 
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -22,58 +31,77 @@ from alembic.script import ScriptDirectory
 
 from .settings import load_settings
 
-# Код успешного выхода / несовместимости (fail-closed).
 EXIT_OK = 0
 EXIT_INCOMPATIBLE = 3
 
 
-def head_revision() -> str:
-    """Head-ревизия кода. Резолвится от каталога миграций рядом с этим модулем
+def _script() -> ScriptDirectory:
+    """Alembic ScriptDirectory. Резолвится от каталога миграций рядом с этим модулем
     (``atlas_core/migrations``), поэтому не зависит от cwd и alembic.ini."""
     migrations = Path(__file__).resolve().parent / "migrations"
     cfg = Config()
     cfg.set_main_option("script_location", str(migrations))
-    script = ScriptDirectory.from_config(cfg)
-    head = script.get_current_head()
-    if head is None:  # pragma: no cover - в репозитории всегда есть head
-        raise RuntimeError("schema_check: не удалось определить head-ревизию кода")
-    return head
+    return ScriptDirectory.from_config(cfg)
 
 
-def current_revision(db_path: str) -> str | None:
-    """Текущая ревизия Alembic в БД (``version_num``) или ``None``, если БД/таблицы нет.
+def code_heads() -> frozenset[str]:
+    """Все head-ревизии кода (обычно ровно одна). Мультиголовье кода тоже отражается."""
+    return frozenset(_script().get_heads())
 
-    Read-only: если файла БД нет, движок НЕ создаётся (иначе SQLite создал бы пустой
-    файл как побочный эффект). Возврат ``None`` трактуется как несовместимость."""
+
+def head_revision() -> str:
+    """Единственный head кода (для сообщений/тестов). Fail-closed при мультиголовье."""
+    heads = code_heads()
+    if len(heads) != 1:
+        raise RuntimeError(
+            f"schema_check: ожидался ровно один code head, найдено {sorted(heads)}")
+    return next(iter(heads))
+
+
+def current_revisions(db_path: str) -> frozenset[str]:
+    """ВСЕ ревизии в ``alembic_version`` (мультиголовье БД тоже видно) как множество.
+
+    Пустое множество, если файла/таблицы нет. Строго read-only, без side-writes:
+    * файл БД не существует → ``frozenset()`` (движок не создаётся);
+    * чистое состояние → ``immutable=1`` (не создаёт ``-wal``/``-shm``);
+    * реально «горячий» непустой WAL → ``mode=ro`` (чтение закоммиченного WAL-состояния;
+      ``-shm`` — индекс, не запись в файл БД). Запись в файл БД невозможна в обоих случаях."""
     if not os.path.exists(db_path):
-        return None
-    from sqlalchemy import create_engine, inspect, text
-    engine = create_engine(f"sqlite:///{db_path}")
+        return frozenset()
+    wal = db_path + "-wal"
+    hot_wal = os.path.exists(wal) and os.path.getsize(wal) > 0
+    suffix = "?mode=ro" if hot_wal else "?mode=ro&immutable=1"
+    uri = Path(db_path).as_uri() + suffix
     try:
-        insp = inspect(engine)
-        if "alembic_version" not in insp.get_table_names():
-            return None
-        with engine.connect() as conn:
-            row = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
-            return row[0] if row else None
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.OperationalError:
+        return frozenset()
+    try:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
+        if cur.fetchone() is None:
+            return frozenset()
+        rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
+        return frozenset(r[0] for r in rows)
     finally:
-        engine.dispose()
+        conn.close()
 
 
 def check() -> int:
-    """Сравнить ревизию БД с head. 0 — совместимо; ``EXIT_INCOMPATIBLE`` — fail-closed."""
+    """Сравнить множество ревизий БД с head-множеством кода. 0 — точное совпадение;
+    ``EXIT_INCOMPATIBLE`` — любое расхождение (fail-closed)."""
     settings = load_settings()
     db_path = settings.db_path
-    head = head_revision()
-    current = current_revision(db_path)
-    if current == head:
-        print(f"[schema_check] OK: схема БД на head {head}")
+    heads = code_heads()
+    current = current_revisions(db_path)
+    if current == heads:
+        print(f"[schema_check] OK: схема БД на head {sorted(heads)}")
         return EXIT_OK
     print(
-        f"[schema_check] НЕСОВМЕСТИМАЯ СХЕМА: БД на ревизии {current!r}, код требует "
-        f"{head!r}. Core не стартует на несовместимой схеме и не мигрирует её неявно. "
-        f"Выполните авторизованную одноразовую guarded-миграцию (ATLAS_RUN_MIGRATIONS=1) "
-        f"ПОСЛЕ backup, затем перезапустите Core.",
+        f"[schema_check] НЕСОВМЕСТИМАЯ СХЕМА: ревизии БД {sorted(current) or '(нет)'}, "
+        f"код требует {sorted(heads)}. Core не стартует на несовместимой схеме и не "
+        f"мигрирует её неявно. Выполните авторизованную одноразовую guarded-миграцию "
+        f"(ATLAS_RUN_MIGRATIONS=1) ПОСЛЕ backup, затем перезапустите Core.",
         file=sys.stderr,
     )
     return EXIT_INCOMPATIBLE
