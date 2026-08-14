@@ -125,6 +125,10 @@ jobs:
         run: docker build -f infra/docker/core.Dockerfile -t atlas-core-ci .
       - name: Регрессия упаковки — consumer и run-result исполняются в образе
         run: bash scripts/check_core_image.sh atlas-core-ci
+      - name: Валидность docker compose config
+        run: docker compose config -q
+      - name: Deploy-safety entrypoint (no-implicit-migration + fail-closed + one-shot migrate)
+        run: bash scripts/check_core_entrypoint.sh atlas-core-ci
 
   security:
     name: Секрет-скан

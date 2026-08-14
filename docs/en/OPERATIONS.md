@@ -10,7 +10,10 @@
   `atlas-bridge`, `RuntimeDirectoryPreserve=yes`).
 - **Core/Web** — Docker Compose: `docker compose {up -d,ps,logs,restart,down}`.
   Core non-root (uid = host `atlas`), Web `nginx-unprivileged` (uid 101), only
-  `127.0.0.1:3210`. Migrations are applied by the entrypoint (`alembic upgrade head`).
+  `127.0.0.1:3210`. A normal Core boot does **not** migrate the live DB: the
+  entrypoint only checks schema compatibility (`atlas_core.schema_check`) and
+  fails closed on a mismatch. The live migration is a separate one-shot command
+  (see "Migrations: deploy-safety model (VP-7)").
 - **Health:** `curl -s http://127.0.0.1:3210/api/v1/health` — truthful
   `READY/DEGRADED/OFFLINE`. Runner offline → overall `DEGRADED`, runner
   `OFFLINE` (visible both in the API and the Web).
@@ -41,9 +44,9 @@
 
 ## Work Orders & Context (VP-4)
 
-- The live migration `0003_product_map → 0004_work_orders` is applied by the
-  entrypoint (`alembic upgrade head`); upgrade order — **backup → migrate →
-  health → switch**. VP-0…VP-3 data is preserved.
+- The live migration `0003_product_map → 0004_work_orders` runs as a one-shot
+  guarded command (see "Migrations: deploy-safety model (VP-7)"); upgrade order —
+  **backup → migrate → health → switch**. VP-0…VP-3 data is preserved.
 - **Reconstruction runs inside the Core image** as an isolated process
   `scripts/vp4_fresh_consumer.py` against the `contracts/schemas/run-result.json`
   contract. The image must ship both — `infra/docker/core.Dockerfile` copies
@@ -53,6 +56,35 @@
 - Context rotation and profile switch preserve **one writer**: the lease is
   released at the boundary. No auto-takeover — reconcile is required.
 - Acceptance: `python3 scripts/run_vp4_acceptance.py` (26/26, stack up).
+
+## Migrations: deploy-safety model (VP-7)
+
+A normal Core start/restart **never** changes the live schema by itself. This
+rules out an implicit upgrade of the live bind-mounted DB on every container
+reboot and a silent start on an incompatible schema.
+
+- **Normal boot:** the entrypoint runs `python -m atlas_core.schema_check` — a
+  read-only comparison of the DB revision against head. Match → start; mismatch →
+  fail closed with an explicit error (Core does not come up on an old/incompatible
+  schema).
+- **The live migration is a one-shot authorized command**, only after a verified
+  backup (order §8: **backup → migrate → health → switch**):
+
+  ```bash
+  # 0006 → 0007: migration runs in a throwaway container; the live-migration
+  # permission (ATLAS_ALLOW_LIVE_MIGRATION) is raised ONLY by this command.
+  docker compose run --rm -e ATLAS_RUN_MIGRATIONS=1 core true
+  # then a normal start, without any migration override:
+  docker compose up -d core
+  ```
+
+- **Compose does not permanently store** `ATLAS_ALLOW_LIVE_MIGRATION`: otherwise
+  every reboot would be an implicitly authorized live migration and would defeat
+  the backup-first guard. The permission lives only inside the one-shot command.
+- **Alembic boundary guard** (`migrations/env.py` → `assert_live_migration_allowed`)
+  fails closed on any `alembic upgrade` against the live data_dir/DB without
+  `ATLAS_ALLOW_LIVE_MIGRATION=1`; isolated/CI/dev targets (temp `ATLAS_DATA_DIR`)
+  are free.
 
 ## Backup (`atlas backup`)
 
@@ -84,7 +116,8 @@ cat "$tmp/manifest.json"                            # db/artifacts hashes
 # 3) apply (owner action): stop Core, swap DB, migrate
 docker compose stop core
 install -o atlas -g atlas -m 0640 "$tmp/atlas.db" /var/lib/codevinci-atlas/atlas.db
-docker compose up -d core     # entrypoint runs alembic upgrade head
+docker compose run --rm -e ATLAS_RUN_MIGRATIONS=1 core true   # one-shot guarded migration
+docker compose up -d core     # normal boot: schema_check, no implicit migration
 curl -s http://127.0.0.1:3210/api/v1/health
 ```
 
