@@ -93,6 +93,12 @@ def check() -> int:
     settings = load_settings()
     db_path = settings.db_path
     heads = code_heads()
+    # Fail-closed при пустом наборе code heads (call-23 F1): иначе пустая/отсутствующая
+    # БД дала бы current==heads==frozenset() → ложный OK. Head код обязан существовать.
+    if not heads:
+        print("[schema_check] НЕСОВМЕСТИМАЯ СХЕМА: не удалось определить code head "
+              "(пустой набор миграций). Fail-closed.", file=sys.stderr)
+        return EXIT_INCOMPATIBLE
     current = current_revisions(db_path)
     if current == heads:
         print(f"[schema_check] OK: схема БД на head {sorted(heads)}")

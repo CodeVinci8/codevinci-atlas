@@ -120,6 +120,54 @@ class TestSchemaCheck(unittest.TestCase):
         self.assertEqual(schema_check.current_revisions(self._db_path()), frozenset())
         self.assertFalse(os.path.exists(self._db_path()))
 
+    # --- call-23 F1: пустой набор code heads не даёт ложный OK ---
+    def test_empty_code_heads_fails_closed(self):
+        from unittest import mock
+
+        from atlas_core import schema_check
+        # Отсутствующая БД → current==frozenset(); если бы code_heads тоже был пуст,
+        # наивное сравнение дало бы OK. Guard обязан fail-closed.
+        with mock.patch.object(schema_check, "code_heads", return_value=frozenset()):
+            self.assertFalse(os.path.exists(self._db_path()))
+            self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
+        # и при наличии БД на head — тоже fail-closed, раз code heads пуст.
+        head = schema_check.head_revision()
+        self._make_db(head)
+        with mock.patch.object(schema_check, "code_heads", return_value=frozenset()):
+            self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
+
+    # --- call-23 F2: ветка mode=ro при реально «горячем» непустом WAL ---
+    def test_hot_wal_read_via_mode_ro(self):
+        from pathlib import Path
+
+        from atlas_core import schema_check
+        head = schema_check.head_revision()
+        dbp = self._db_path()
+        w = sqlite3.connect(dbp)
+        w.execute("PRAGMA journal_mode=wal")
+        w.execute("PRAGMA wal_autocheckpoint=0")  # не чекпоинтить — держать -wal горячим
+        w.execute("CREATE TABLE alembic_version (version_num varchar(32) NOT NULL)")
+        w.execute("INSERT INTO alembic_version (version_num) VALUES (?)", (head,))
+        w.commit()
+        try:
+            wal = dbp + "-wal"
+            self.assertTrue(os.path.exists(wal) and os.path.getsize(wal) > 0,
+                            "тест должен создать непустой -wal (горячий WAL)")
+            # immutable=1 игнорирует WAL → таблица/строка ещё только в -wal → пусто.
+            imm_uri = Path(dbp).as_uri() + "?mode=ro&immutable=1"
+            imm = sqlite3.connect(imm_uri, uri=True)
+            try:
+                has_tbl = imm.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND "
+                    "name='alembic_version'").fetchone()
+            finally:
+                imm.close()
+            self.assertIsNone(has_tbl, "immutable не должен видеть данные, лежащие только в WAL")
+            # current_revisions видит горячий WAL → выбирает mode=ro → читает ревизию.
+            self.assertEqual(schema_check.current_revisions(dbp), frozenset({head}))
+        finally:
+            w.close()
+
 
 if __name__ == "__main__":
     unittest.main()

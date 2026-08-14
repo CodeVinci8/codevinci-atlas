@@ -134,6 +134,37 @@ def run_fresh_acceptance() -> dict:
             "log_tail": (r.stdout or "")[-300:]}
 
 
+# Целевые unit-тесты, покрывающие граничные случаи текущего diff. Настраивается через
+# VP7_TARGETED_TESTS (пробел-разделённый), по умолчанию — deploy-safety набор.
+_TARGETED_TESTS = (os.environ.get("VP7_TARGETED_TESTS", "").split() or [
+    "tests.test_vp7_schema_check",
+    "tests.test_vp7_deploy_safety",
+    "tests.test_vp7_review_harness",
+])
+
+
+def run_targeted_tests() -> dict:
+    """First-party прогон целевых unit-тестов на ТЕКУЩЕМ head (call-23 F3).
+
+    Reviewer исполняется в codex read-only sandbox и не может писать temp → pytest у
+    него падает; поэтому harness сам исполняет целевые тесты в доверенном окружении и
+    предъявляет реальные результаты (команда/exit/имена прошедших тестов). Это
+    ДОПОЛНЯЕТ чтение исходников Reviewer'ом, а не подменяет. Fail-closed: не-ноль →
+    provider не вызывается."""
+    ts = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    cmd = [str(_ROOT / ".venv/bin/python"), "-m", "unittest", "-v", *_TARGETED_TESTS]
+    r = sh(cmd, cwd=str(_ROOT),
+           env={**os.environ,
+                "PYTHONPATH": f"{_ROOT}/apps/core:{_ROOT}/apps/runner:{_ROOT}/tests"})
+    out = (r.stdout or "") + (r.stderr or "")
+    m = re.search(r"Ran (\d+) tests", out)
+    ran = int(m.group(1)) if m else 0
+    names = re.findall(r"^(test_\w+) \(.*\) \.\.\. ok", out, flags=re.MULTILINE)
+    return {"command": " ".join(cmd), "exit_code": r.returncode, "ran": ran,
+            "ok": r.returncode == 0 and ran > 0, "modules": _TARGETED_TESTS,
+            "passed_tests": names, "timestamp": ts, "log_tail": out[-600:]}
+
+
 # ОБЯЗАТЕЛЬНАЯ evidence-политика финального review (§2): набор фиксирован и НЕ
 # сжимается до «какие файлы оказались на диске». Отсутствие любого обязательного
 # evidence → STOP до provider-вызова (а не тихий silent-shrink).
@@ -303,6 +334,17 @@ def main():
         return {"ok": False, "blocker": "acceptance incomplete", "accept": accept}
     print(f"  acceptance: {accept['passed']}/{accept['total']} exit={accept['exit_code']} @ {accept['timestamp']}")
 
+    # First-party целевые unit-тесты граничных случаев (call-23 F3): Reviewer в
+    # read-only sandbox не может их запустить — harness исполняет и предъявляет
+    # реальные результаты. Fail-closed при провале.
+    targeted = run_targeted_tests()
+    if not targeted["ok"]:
+        print(f"  BLOCKER: целевые unit-тесты не прошли (exit={targeted['exit_code']}, "
+              f"ran={targeted['ran']}). Provider не вызывается.")
+        return {"ok": False, "blocker": "targeted tests failed", "targeted": targeted}
+    print(f"  targeted tests: {targeted['ran']} прошло exit={targeted['exit_code']} "
+          f"@ {targeted['timestamp']} ({', '.join(targeted['modules'])})")
+
     injected_verdict = (os.environ.get("VP7_REVIEWER_VERDICT", "").upper() or None)
     injected_findings = json.loads(os.environ.get("VP7_REVIEWER_FINDINGS", "[]"))
     old_findings = json.loads(os.environ.get("VP7_OLD_FINDINGS", "[]"))
@@ -372,13 +414,21 @@ def main():
         {"criterion": "CI required-context policy GREEN на текущем head",
          "check": "gh (GhForge.checks)", "passed": True, "head": head,
          "source": "atlas_core.github_adapter.classify_check_runs"},
+        {"criterion": f"целевые unit-тесты граничных случаев {targeted['ran']} прошло",
+         "check": "unittest -v (first-party)", "passed": targeted["ok"],
+         "command": targeted["command"], "exit_code": targeted["exit_code"],
+         "timestamp": targeted["timestamp"], "head": head,
+         "source": ",".join(targeted["modules"])},
     ] + [{"criterion": f"evidence {d['ref']} разрешимо ({d['source']})",
           "check": "sha256", "passed": True, "sha256": d["sha256"], "head": head}
          for d in ev_details]
 
+    _passed_tail = ", ".join(targeted["passed_tests"][-8:]) or "(нет)"
     evidence_ctx = os.environ.get("VP7_EVIDENCE_CTX") or (
         f"run_vp7_acceptance {accept['passed']}/{accept['total']} exit={accept['exit_code']} "
-        f"@ {accept['timestamp']} (source {accept['source']}); durable evidence для head "
+        f"@ {accept['timestamp']} (source {accept['source']}); first-party целевые "
+        f"unit-тесты: {targeted['command']} → ran={targeted['ran']} exit={targeted['exit_code']} "
+        f"(passed incl.: {_passed_tail}); durable evidence для head "
         f"{head[:12]}: {', '.join(d['ref'] for d in ev_details) or '(нет)'}; CI по "
         f"required-context policy (4 обязательные job present+success); base "
         f"{base_sha[:12]} == live main == PR base; секрет/privacy-скан — см. §4 отчёт.")
@@ -498,7 +548,7 @@ def main():
         "merge_result": merged_result,
         "repo": repo, "base": base, "base_sha": base_sha, "base_verification": base_detail,
         "head_sha": head, "pr": pr,
-        "acceptance": accept, "evidence_registered": ev_details,
+        "acceptance": accept, "targeted_tests": targeted, "evidence_registered": ev_details,
         "diff": {"files": len(files), "insertions": ins, "deletions": dele, "diff_bytes": len(full_diff)},
         "reviewer_profile": REVIEWER, "reviewer_independent": True, "reviewer_cwd": str(_ROOT),
         "reviewer_verdict": verdict_reviewer, "reviewer_findings": reviewer_findings,
