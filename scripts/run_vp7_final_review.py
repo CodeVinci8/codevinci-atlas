@@ -181,27 +181,34 @@ def collect_and_register_evidence(head: str) -> tuple[list[str], list[dict], lis
     return refs, arts, details
 
 
-def _reviewer_prompt(repo, base, head, files, ins, dele, diff_path, old_findings, evidence_ctx):
+# Область оценки Reviewer. По умолчанию — VP-7 (автономия/GitHub/Time Machine).
+# Переопределяется VP7_REVIEW_SCOPE, когда diff — иной по природе (напр. deploy-safety),
+# чтобы независимый Reviewer оценивал именно то, что реально в diff, а не сводку.
+_DEFAULT_REVIEW_SCOPE = (
+    "Оцени VP-7 (автономия/GitHub/Time Machine): соответствие заявленному scope, корректность "
+    "fail-closed оценки грантов, merge gate (current-head/stale деним), Emergency Stop, "
+    "checkpoints/replay, auth-health, персистентность github_deliveries; отсутствие явных "
+    "дефектов/секретов/regressions.")
+
+
+def _reviewer_prompt(repo, base, head, files, ins, dele, diff_path, old_findings, evidence_ctx, scope):
     changed = "\n".join(f"  - {f}" for f in files[:60])
     old = "\n".join(f"  - {f}" for f in old_findings) if old_findings else "  (нет)"
     return (
         "Ты независимый Reviewer (read-only). НЕ редактируй код и worktree. Твой рабочий каталог — "
         f"репозиторий {repo} (текущий). Полный diff origin/{base}...HEAD ({len(files)} файлов, "
         f"+{ins}/-{dele}) записан в файл {diff_path} — прочитай его. Ты можешь открывать любые "
-        "изменённые файлы репозитория (apps/core/atlas_core/*.py, apps/web/src/*, миграция 0007, "
-        "tests/test_vp7_autonomy.py, scripts/run_vp7_acceptance.py) для верификации. Оцени VP-7 "
-        "(автономия/GitHub/Time Machine): соответствие заявленному scope, корректность fail-closed "
-        "оценки грантов, merge gate (current-head/stale деним), Emergency Stop, checkpoints/replay, "
-        "auth-health, персистентность github_deliveries; отсутствие явных дефектов/секретов/regressions.\n"
+        "изменённые файлы репозитория для верификации. "
+        f"{scope}\n"
         f"Изменённые файлы:\n{changed}\n"
-        f"Предыдущие находки прошлого (неполного) review для проверки:\n{old}\n"
+        f"Предыдущие находки прошлого review для проверки:\n{old}\n"
         f"Детерминированные доказательства: {evidence_ctx}\n"
         "Верни СТРОГО один JSON без пояснений: "
         "{\"verdict\": \"PASS\"|\"REVISE\", \"findings\": [строки], \"checked_files\": [строки]}.")
 
 
 def _build_quality(base_sha, head, files, ins, dele, verdict_reviewer, reviewer_findings, stat,
-                   *, acceptance, evidence_refs, artifact_hashes):
+                   *, acceptance, evidence_refs, artifact_hashes, branch="atlas/vp-7-autonomy-github-time-machine"):
     """Собрать SHA-bound **evidence-backed** ReviewPackage + QualityReport для точного
     head из РЕАЛЬНЫХ входов (§3): точный ``base_sha`` (не «origin/main»), acceptance
     из свежих результатов, evidence_refs/artifact_hashes из durable-зарегистрированных
@@ -212,7 +219,7 @@ def _build_quality(base_sha, head, files, ins, dele, verdict_reviewer, reviewer_
     from atlas_core.reviewpkg import ReviewInputs, build_review_package, resolve_review_facts
     pkg = build_review_package(ReviewInputs(
         project_id="proj_vp7", run_id="run_final", wo_key="VP-7", vp_key="VP-7",
-        branch="atlas/vp-7-autonomy-github-time-machine", base_sha=base_sha, head_sha=head,
+        branch=branch, base_sha=base_sha, head_sha=head,
         spec_hash="sha256:vp7-spec", impact_class="SHARED",
         diff_summary={"files": len(files), "insertions": ins, "deletions": dele, "stat_tail": stat[-400:]},
         acceptance=acceptance,
@@ -238,9 +245,14 @@ def main():
     base = sys.argv[2] if len(sys.argv) > 2 else "main"
     head = sys.argv[3] if len(sys.argv) > 3 else sh(["git", "-C", str(_ROOT), "rev-parse", "HEAD"]).stdout.strip()
     pr = int(sys.argv[4]) if len(sys.argv) > 4 else 13
+    # Ветка и область оценки: динамические (труть о реально ревьюемой ветке/diff),
+    # переопределяемы через VP7_BRANCH / VP7_REVIEW_SCOPE.
+    branch = os.environ.get("VP7_BRANCH") or sh(
+        ["git", "-C", str(_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+    scope = os.environ.get("VP7_REVIEW_SCOPE") or _DEFAULT_REVIEW_SCOPE
     _preserve_call7()  # immutable снимок исторического call-7 до записи call-8
     print(f"=== VP-7 FINAL FULL-DIFF QUALITY REVIEW call={REVIEW_CALL} "
-          f"(repo={repo} base={base} head={head[:12]} pr=#{pr}) ===")
+          f"(repo={repo} base={base} head={head[:12]} pr=#{pr} branch={branch}) ===")
 
     # Верификация: локальный HEAD == заявленный head (review именно текущего head).
     local_head = sh(["git", "-C", str(_ROOT), "rev-parse", "HEAD"]).stdout.strip()
@@ -347,7 +359,8 @@ def main():
     # DRY-RUN валидация Quality/merge-gate конструкторов ДО provider-вызова (fail fast).
     try:
         _build_quality(base_sha, head, files, ins, dele, "REVISE", ["dry-run"], stat,
-                       acceptance=acceptance, evidence_refs=ev_refs, artifact_hashes=ev_arts)
+                       acceptance=acceptance, evidence_refs=ev_refs, artifact_hashes=ev_arts,
+                       branch=branch)
     except Exception as exc:  # noqa: BLE001
         print(f"  BLOCKER: Quality-конструкторы невалидны ({type(exc).__name__}: {exc}). Provider не вызывается.")
         return {"ok": False, "blocker": "quality construction invalid"}
@@ -374,7 +387,7 @@ def main():
             print(f"  BLOCKER: {REVIEWER} не READY. Owner: codex login в root профиля.")
             return {"ok": False, "blocker": f"{REVIEWER} not authenticated"}
         prompt = _reviewer_prompt(repo, base, head, files, ins, dele,
-                                  str(diff_file), old_findings, evidence_ctx)
+                                  str(diff_file), old_findings, evidence_ctx, scope)
         job = JobPackage(goal=prompt, role=Role.REVIEWER, provider=Provider.CODEX,
                          inputs={"cwd": str(_ROOT), "timeout_s": 400})  # cwd = РЕПОЗИТОРИЙ
         print(f"  [call {REVIEW_CALL}] codex Reviewer ({REVIEWER}) — независимый read-only на ПОЛНОМ diff (cwd=repo)")
@@ -400,7 +413,7 @@ def main():
     # реальный SHA-bound evidence-backed ReviewPackage + QualityReport
     pkg, outcome = _build_quality(base_sha, head, files, ins, dele, verdict_reviewer,
                                   reviewer_findings, stat, acceptance=acceptance,
-                                  evidence_refs=ev_refs, artifact_hashes=ev_arts)
+                                  evidence_refs=ev_refs, artifact_hashes=ev_arts, branch=branch)
     print(f"  Quality verdict: {outcome.verdict} gate={outcome.gate_fired}")
 
     # PRODUCTION merge-путь (Fix1): единственный GitHubAdapter.merge_pull_request через
@@ -428,7 +441,7 @@ def main():
     merged_result = None
     genuine_pass = (verdict_reviewer == "PASS" and outcome.verdict == "PASS" and gate.permitted)
     if genuine_pass and os.environ.get("VP7_EXECUTE_MERGE") == "1":
-        print("  [PASS] исполняю production merge PR #13 через merge_pull_request…")
+        print(f"  [PASS] исполняю production merge PR #{pr} через merge_pull_request…")
         merged_result = adapter.merge_pull_request(
             project_id="proj_vp7", review_package_id=pkg["id"],
             quality_report_id=outcome.report["id"], pr_number=pr, expected_head=head,
