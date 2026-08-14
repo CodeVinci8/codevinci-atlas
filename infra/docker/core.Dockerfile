@@ -40,10 +40,16 @@ ARG ATLAS_UID=10001
 ARG ATLAS_GID=10001
 RUN groupadd --gid ${ATLAS_GID} atlas || true \
  && useradd --uid ${ATLAS_UID} --gid ${ATLAS_GID} --no-create-home --shell /usr/sbin/nologin atlas || true
+
+# Обычный boot НЕ мигрирует: entrypoint проверяет совместимость схемы и fail-closed.
+# Живая миграция — только одноразовая deploy-команда с ATLAS_RUN_MIGRATIONS=1 (§8, §34).
+# COPY+chmod от root ДО смены пользователя — портируемо для classic builder и BuildKit
+# (без BuildKit-only --chmod), чтобы образ собирался и на host-деплое.
+COPY infra/docker/core-entrypoint.sh /usr/local/bin/core-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/core-entrypoint.sh
+
 USER ${ATLAS_UID}:${ATLAS_GID}
 
 EXPOSE 8000
-# Миграции применяются entrypoint'ом до старта (accepted path — только Alembic).
-COPY --chmod=0755 infra/docker/core-entrypoint.sh /usr/local/bin/core-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/core-entrypoint.sh"]
 CMD ["uvicorn", "atlas_core.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

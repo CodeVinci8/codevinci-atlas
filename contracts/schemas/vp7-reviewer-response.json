@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VP-7 final-review Reviewer response",
+  "description": "Строгий структурный контракт ответа независимого Reviewer (codex exec --output-schema). Все поля обязательны; непустота checked_files дополнительно enforced в постобработке harness (_evaluate_reviewer_response).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "findings", "checked_files"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "REVISE"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "checked_files": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

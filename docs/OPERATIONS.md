@@ -10,7 +10,10 @@
   `atlas-bridge`, `RuntimeDirectoryPreserve=yes`).
 - **Core/Web** — Docker Compose: `docker compose {up -d,ps,logs,restart,down}`.
   Core non-root (uid = host `atlas`), Web `nginx-unprivileged` (uid 101), только
-  `127.0.0.1:3210`. Миграции применяет entrypoint (`alembic upgrade head`).
+  `127.0.0.1:3210`. Обычный boot Core **не** мигрирует живую БД: entrypoint лишь
+  проверяет совместимость схемы (`atlas_core.schema_check`) и fail-closed при
+  несовпадении. Живая миграция — отдельная одноразовая команда (см.
+  «Миграции: deploy-safety модель (VP-7)»).
 - **Health:** `curl -s http://127.0.0.1:3210/api/v1/health` — правдивые
   `READY/DEGRADED/OFFLINE`. Runner offline → overall `DEGRADED`, runner
   `OFFLINE` (виден и в API, и в Web).
@@ -58,9 +61,9 @@ fresh session + handoff → continue`. Аренда A освобождается
 
 ## Work Orders & Context (VP-4)
 
-- Живая миграция `0003_product_map → 0004_work_orders` применяется entrypoint'ом
-  (`alembic upgrade head`); порядок обновления — **backup → migrate → health →
-  switch**. Данные VP-0…VP-3 сохраняются.
+- Живая миграция `0003_product_map → 0004_work_orders` выполняется одноразовой
+  guarded-командой (см. «Миграции: deploy-safety модель (VP-7)»); порядок
+  обновления — **backup → migrate → health → switch**. Данные VP-0…VP-3 сохраняются.
 - **Реконструкция исполняется внутри Core-образа** изолированным процессом
   `scripts/vp4_fresh_consumer.py` по контракту `contracts/schemas/run-result.json`.
   Образ обязан их содержать — `infra/docker/core.Dockerfile` копирует
@@ -70,6 +73,34 @@ fresh session + handoff → continue`. Аренда A освобождается
 - Ротация контекста и смена профиля сохраняют **одного writer**: lease
   освобождается на границе (см. выше). Автоугона нет — нужен reconcile.
 - Приёмка: `python3 scripts/run_vp4_acceptance.py` (26/26, стек поднят).
+
+## Миграции: deploy-safety модель (VP-7)
+
+Обычный запуск/перезапуск Core **никогда** не меняет живую схему сам. Так
+исключён неявный upgrade живой bind-mount БД при каждой перезагрузке контейнера
+и молчаливый старт на несовместимой схеме.
+
+- **Обычный boot:** entrypoint зовёт `python -m atlas_core.schema_check` — read-only
+  сравнение ревизии БД с head. Совпадает → старт; не совпадает → fail-closed с
+  явной ошибкой (Core не поднимается на старой/несовместимой схеме).
+- **Живая миграция — одноразовая авторизованная команда** только после
+  проверенного backup (порядок §8: **backup → migrate → health → switch**):
+
+  ```bash
+  # 0006 → 0007: миграция выполняется в разовом контейнере; разрешение на живую
+  # миграцию (ATLAS_ALLOW_LIVE_MIGRATION) поднимается ТОЛЬКО этой командой.
+  docker compose run --rm -e ATLAS_RUN_MIGRATIONS=1 core true
+  # затем обычный старт — уже без каких-либо migration-override:
+  docker compose up -d core
+  ```
+
+- **Compose не хранит** `ATLAS_ALLOW_LIVE_MIGRATION` постоянно: иначе каждая
+  перезагрузка была бы неявно авторизованной живой миграцией и обесценила бы
+  backup-first guard. Разрешение живёт только внутри одноразовой команды выше.
+- **Guard границы alembic** (`migrations/env.py` → `assert_live_migration_allowed`)
+  fail-closed блокирует любой `alembic upgrade` против живого data_dir/DB без
+  `ATLAS_ALLOW_LIVE_MIGRATION=1`; изолированные/CI/dev-цели (temp `ATLAS_DATA_DIR`)
+  — свободно.
 
 ## Резервное копирование (`atlas backup`)
 
@@ -101,7 +132,8 @@ cat "$tmp/manifest.json"                            # хеши db/artifacts
 # 3) Применение (owner-действие): остановить Core, заменить БД, мигрировать
 docker compose stop core
 install -o atlas -g atlas -m 0640 "$tmp/atlas.db" /var/lib/codevinci-atlas/atlas.db
-docker compose up -d core     # entrypoint выполнит alembic upgrade head
+docker compose run --rm -e ATLAS_RUN_MIGRATIONS=1 core true   # одноразовая guarded-миграция
+docker compose up -d core     # обычный boot: schema_check, без неявной миграции
 curl -s http://127.0.0.1:3210/api/v1/health
 ```
 
