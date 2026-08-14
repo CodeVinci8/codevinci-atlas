@@ -134,13 +134,21 @@ def run_fresh_acceptance() -> dict:
             "log_tail": (r.stdout or "")[-300:]}
 
 
-# Целевые unit-тесты, покрывающие граничные случаи текущего diff. Настраивается через
-# VP7_TARGETED_TESTS (пробел-разделённый), по умолчанию — deploy-safety набор.
-_TARGETED_TESTS = (os.environ.get("VP7_TARGETED_TESTS", "").split() or [
+# Обязательные целевые unit-тесты граничных случаев — ФИКСИРОВАНЫ (call-24 F2).
+# VP7_TARGETED_TESTS может только ДОБАВЛЯТЬ модули, но НЕ заменять обязательные —
+# иначе fail-closed deploy-safety проверку можно было бы обойти одним тривиальным тестом.
+_MANDATORY_TARGETED = (
     "tests.test_vp7_schema_check",
     "tests.test_vp7_deploy_safety",
     "tests.test_vp7_review_harness",
-])
+)
+
+
+def _targeted_modules() -> list[str]:
+    """Обязательный набор + (опционально) добавленные через VP7_TARGETED_TESTS модули.
+    Обязательные всегда присутствуют — override не может их вытеснить."""
+    extra = os.environ.get("VP7_TARGETED_TESTS", "").split()
+    return list(_MANDATORY_TARGETED) + [m for m in extra if m not in _MANDATORY_TARGETED]
 
 
 def run_targeted_tests() -> dict:
@@ -152,7 +160,8 @@ def run_targeted_tests() -> dict:
     ДОПОЛНЯЕТ чтение исходников Reviewer'ом, а не подменяет. Fail-closed: не-ноль →
     provider не вызывается."""
     ts = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
-    cmd = [str(_ROOT / ".venv/bin/python"), "-m", "unittest", "-v", *_TARGETED_TESTS]
+    mods = _targeted_modules()
+    cmd = [str(_ROOT / ".venv/bin/python"), "-m", "unittest", "-v", *mods]
     r = sh(cmd, cwd=str(_ROOT),
            env={**os.environ,
                 "PYTHONPATH": f"{_ROOT}/apps/core:{_ROOT}/apps/runner:{_ROOT}/tests"})
@@ -160,8 +169,10 @@ def run_targeted_tests() -> dict:
     m = re.search(r"Ran (\d+) tests", out)
     ran = int(m.group(1)) if m else 0
     names = re.findall(r"^(test_\w+) \(.*\) \.\.\. ok", out, flags=re.MULTILINE)
+    # ok только если обязательные модули присутствуют и всё прошло (fail-closed).
+    mandatory_ok = set(_MANDATORY_TARGETED) <= set(mods)
     return {"command": " ".join(cmd), "exit_code": r.returncode, "ran": ran,
-            "ok": r.returncode == 0 and ran > 0, "modules": _TARGETED_TESTS,
+            "ok": r.returncode == 0 and ran > 0 and mandatory_ok, "modules": mods,
             "passed_tests": names, "timestamp": ts, "log_tail": out[-600:]}
 
 

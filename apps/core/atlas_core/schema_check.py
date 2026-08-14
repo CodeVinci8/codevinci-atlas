@@ -93,11 +93,13 @@ def check() -> int:
     settings = load_settings()
     db_path = settings.db_path
     heads = code_heads()
-    # Fail-closed при пустом наборе code heads (call-23 F1): иначе пустая/отсутствующая
-    # БД дала бы current==heads==frozenset() → ложный OK. Head код обязан существовать.
-    if not heads:
-        print("[schema_check] НЕСОВМЕСТИМАЯ СХЕМА: не удалось определить code head "
-              "(пустой набор миграций). Fail-closed.", file=sys.stderr)
+    # Fail-closed, если code head НЕ ровно один (call-23 F1: пустой набор; call-24 F1:
+    # мультиголовье). Продакшн-схема линейна — ровно один head. Иначе пустая БД дала бы
+    # current==heads==∅ → ложный OK, а мультиголовая БД, совпавшая с несколькими code
+    # heads, обошла бы single-head инвариант.
+    if len(heads) != 1:
+        print(f"[schema_check] НЕСОВМЕСТИМАЯ СХЕМА: ожидался ровно один code head, "
+              f"найдено {sorted(heads)}. Fail-closed.", file=sys.stderr)
         return EXIT_INCOMPATIBLE
     current = current_revisions(db_path)
     if current == heads:

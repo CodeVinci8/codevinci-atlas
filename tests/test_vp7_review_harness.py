@@ -58,5 +58,36 @@ class TestReviewerPromptAntiInjection(unittest.TestCase):
         self.assertNotIn("\x00", H._sanitize_scope("a\x00b"))
 
 
+class TestTargetedTestsCannotBeBypassed(unittest.TestCase):
+    """call-24 F2: VP7_TARGETED_TESTS может только ДОБАВЛЯТЬ, обязательные — фиксированы."""
+
+    def setUp(self):
+        self._saved = os.environ.get("VP7_TARGETED_TESTS")
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("VP7_TARGETED_TESTS", None)
+        else:
+            os.environ["VP7_TARGETED_TESTS"] = self._saved
+
+    def test_default_is_mandatory_set(self):
+        os.environ.pop("VP7_TARGETED_TESTS", None)
+        self.assertEqual(H._targeted_modules(), list(H._MANDATORY_TARGETED))
+
+    def test_override_only_adds_cannot_replace(self):
+        # Попытка заменить обязательный набор одним тривиальным тестом.
+        os.environ["VP7_TARGETED_TESTS"] = "tests.test_vp7_migration_guard"
+        mods = H._targeted_modules()
+        # обязательные всё равно присутствуют + добавленный.
+        self.assertTrue(set(H._MANDATORY_TARGETED) <= set(mods))
+        self.assertIn("tests.test_vp7_migration_guard", mods)
+
+    def test_override_does_not_duplicate_mandatory(self):
+        os.environ["VP7_TARGETED_TESTS"] = "tests.test_vp7_schema_check tests.test_extra"
+        mods = H._targeted_modules()
+        self.assertEqual(mods.count("tests.test_vp7_schema_check"), 1)
+        self.assertIn("tests.test_extra", mods)
+
+
 if __name__ == "__main__":
     unittest.main()

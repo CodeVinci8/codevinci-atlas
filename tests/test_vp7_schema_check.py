@@ -136,6 +136,17 @@ class TestSchemaCheck(unittest.TestCase):
         with mock.patch.object(schema_check, "code_heads", return_value=frozenset()):
             self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
 
+    # --- call-24 F1: мультиголовье code НЕ проходит, даже если БД совпадает ---
+    def test_multi_head_code_fails_closed_even_if_db_matches(self):
+        from unittest import mock
+
+        from atlas_core import schema_check
+        two = frozenset({"headA", "headB"})
+        self._make_db(["headA", "headB"])  # БД совпадает с обоими code heads
+        with mock.patch.object(schema_check, "code_heads", return_value=two):
+            # single-head инвариант: len(heads)!=1 → fail-closed, несмотря на совпадение.
+            self.assertEqual(schema_check.check(), schema_check.EXIT_INCOMPATIBLE)
+
     # --- call-23 F2: ветка mode=ro при реально «горячем» непустом WAL ---
     def test_hot_wal_read_via_mode_ro(self):
         from pathlib import Path
